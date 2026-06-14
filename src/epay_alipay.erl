@@ -85,12 +85,15 @@ create_payment(Cfg, Order) ->
     end.
 
 %% @doc 回调验签。Ctx :: #{form := map()}（已 url-decode 的异步通知表单）。
-%% 验签通过返回 {ok, FormMap}（含 out_trade_no/trade_no/trade_status/...）。
+%% 验签通过返回 {ok, FormMap}：除原始字段（out_trade_no/trade_no/trade_status/…）
+%% 外，加性附带归一 trade_state（epay_state:state()），调用方无须再认识渠道词汇。
 -spec verify_notify(map(), map()) -> {ok, map()} | epay_gateway:err().
 verify_notify(Cfg, Ctx) ->
     Form = maps:get(form, Ctx, #{}),
     case verify_form(Cfg, Form) of
-        ok -> {ok, Form};
+        ok ->
+            St = map_alipay_state(maps:get(<<"trade_status">>, Form, <<>>)),
+            {ok, Form#{trade_state => St}};
         {error, _} = Err -> Err
     end.
 

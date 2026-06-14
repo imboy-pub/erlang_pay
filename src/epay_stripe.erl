@@ -82,7 +82,9 @@ verify_notify(Cfg, Ctx) ->
     case verify_webhook(Cfg, SigHeader, Body) of
         ok ->
             case epay_util:json_decode(Body) of
-                {ok, Event} when is_map(Event) -> {ok, Event};
+                {ok, Event} when is_map(Event) ->
+                    St = map_stripe_event(maps:get(<<"type">>, Event, <<>>)),
+                    {ok, Event#{trade_state => St}};
                 _ -> {error, {bad_event_json, <<"Stripe 事件 JSON 解析失败"/utf8>>}}
             end;
         {error, _} = Err ->
@@ -315,6 +317,20 @@ map_stripe_state(<<"requires_action">>) -> pending;
 map_stripe_state(<<"requires_capture">>) -> pending;
 map_stripe_state(<<"canceled">>) -> closed;
 map_stripe_state(_) -> unknown.
+
+%% Webhook 事件 type → 归一 trade_state（区别于 map_stripe_state 的
+%% payment_intent.status；回调以事件 type 为准）。返回值属 epay_state:state()。
+-spec map_stripe_event(binary()) -> epay_state:state().
+map_stripe_event(<<"payment_intent.succeeded">>) -> success;
+map_stripe_event(<<"charge.succeeded">>) -> success;
+map_stripe_event(<<"payment_intent.processing">>) -> pending;
+map_stripe_event(<<"payment_intent.requires_action">>) -> pending;
+map_stripe_event(<<"payment_intent.payment_failed">>) -> error;
+map_stripe_event(<<"charge.failed">>) -> error;
+map_stripe_event(<<"payment_intent.canceled">>) -> closed;
+map_stripe_event(<<"charge.refunded">>) -> refunded;
+map_stripe_event(<<"charge.refund.updated">>) -> refunded;
+map_stripe_event(_) -> unknown.
 
 %%%===================================================================
 %%% 对账（Reporting：POST /v1/reporting/report_runs）

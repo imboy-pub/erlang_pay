@@ -223,7 +223,7 @@ verify_notify(Cfg, Headers, RawBody) ->
                     case safe_b64_decode(Sig) of
                         {ok, SigBin} ->
                             case epay_crypto:rsa_verify_sha256(Message, SigBin, PubKey) of
-                                true -> decrypt_resource(Cfg, RawBody);
+                                true -> add_notify_state(decrypt_resource(Cfg, RawBody));
                                 false -> {error, {bad_signature, <<"微信回调验签失败"/utf8>>}}
                             end;
                         error ->
@@ -256,6 +256,16 @@ check_timestamp(TsBin) ->
     catch
         _:_ -> {error, {invalid_timestamp, <<"微信回调时间戳非法"/utf8>>}}
     end.
+
+%% 加性注入归一 trade_state（epay_state:state()）到解密后的回调明文。
+%% 无 trade_state 字段（如部分退款回调）→ unknown，不崩溃；保留全部原始字段。
+-spec add_notify_state({ok, map()} | epay_gateway:err()) ->
+    {ok, map()} | epay_gateway:err().
+add_notify_state({ok, M}) when is_map(M) ->
+    St = map_wechat_state(maps:get(<<"trade_state">>, M, <<>>)),
+    {ok, M#{trade_state => St}};
+add_notify_state(Other) ->
+    Other.
 
 -spec decrypt_resource(map(), binary()) -> {ok, map()} | epay_gateway:err().
 decrypt_resource(Cfg, RawBody) ->
