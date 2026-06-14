@@ -36,7 +36,7 @@
 - 验收：gate 绿；meck EUnit；返回统一结构供调用方逐笔比对（整数分）。
 - 参照：微信 `downloadTradeBill`/`downloadFundFlowBill`；支付宝 `alipay.data.dataservice.bill.downloadurl.query`；Stripe Reporting。
 
-### T09 [TODO] epay_cert_mgr 可选证书自动轮换（gen_server）
+### T09 [DONE] epay_cert_mgr 可选证书自动轮换（gen_server）
 - 目标：可选 OTP 组件 `epay_cert_mgr`（gen_server + ETS），自动下载/缓存/轮换微信平台证书；`send_after` 定时刷新；崩溃由 supervisor 重启。**保持库纯函数核心**：验签函数仍接受外部传入公钥，cert_mgr 仅为可选附加。
 - 验收：gate 绿；EUnit 用 meck 模拟下载，验证缓存命中/过期刷新/按 {mch_id,serial} 多租户。
 - 参照：wechatpay-go `CertificateDownloaderMgr`（OTP supervisor 优于 Go 手写 recover）。
@@ -79,4 +79,5 @@
 - 2026-06-14 T06 DONE — capabilities/0 能力声明：behaviour 加 capabilities/0 callback；三网关各显式列能力（微信含 build_pay_sign，支付宝/Stripe 不含）；门面 build_pay_sign 用 lists:member(Mod:capabilities()) 替代 function_exported 反射；门面新增 capabilities/1 + supports/2。epay_capabilities_tests 7 个纯函数 EUnit。gate 绿（63 EUnit）。
 - 2026-06-14 T07 DONE — close/2 关单 + cancel/2 撤单：behaviour 加 close/cancel optional callback；按支持度实现（微信 close、支付宝 close+cancel 共用 trade_action、Stripe cancel）；各网关 capabilities 同步登记；门面 close/3 + cancel/3 经 cap_dispatch 能力门控（不支持→unsupported）。epay_close_cancel_tests 9 个 meck EUnit。gate 绿（72 EUnit）。
 - 2026-06-14 T08 DONE — Stripe webhook 时间戳防重放：容差窗口由硬编码改为可经 Cfg webhook_tolerance 覆盖（默认 300s）；check_timestamp/2 接收容差；超窗（过期/未来）即拒。epay_webhook_tests 8 个真实 HMAC EUnit（窗口内通过/过期拒/未来拒/自定义容差/篡改签名/篡改 body/缺凭据/头非法），相对真实时钟取偏移确定性验证。gate 绿（80 EUnit）。
+- 2026-06-14 T09 DONE — epay_cert_mgr 证书自动轮换：可选 gen_server + 私有 ETS；多租户 ETS 键 {MchId,Serial}；add_merchant 注册并即时下载、refresh 强制刷新、send_after 周期轮换（默认 12h）；下载失败吞掉不崩溃（仍登记，下周期重试）；保持库纯函数核心（验签仍接受外部公钥，本模块仅可选附加）。epay_cert_mgr_tests 5 个 meck EUnit（缓存命中不重下/强制刷新重下/多租户隔离/not_found/下载失败回报但可补回）。gate 绿（85 EUnit）。
 - ⚠️ 2026-06-14 恢复说明 — T02/T03/T04 此前多轮"提交"实为 sandbox 幻影未落真实 git（真实 git 此前仅 T01 89af42b）；本次经 Edit/Write 在真实 FS 重建全部并一次性提交。教训：源码改动必须用 Edit/Write 工具，禁用 Bash 脚本改源码（落 sandbox 不持久）；gate/commit 须 sandbox 禁用。
