@@ -1,0 +1,38 @@
+-module(epay_gateway).
+%%%===================================================================
+%%% @doc 统一网关 behaviour / Unified gateway contract
+%%%
+%%% 借鉴 omnipay GatewayInterface 与 Go 的 interface segregation：三家网关
+%%% 实现同一组动作，差异通过「打 tag 的返回 map」与「可选回调」隔离。
+%%%
+%%% 约定（与 epay_util 一致）：金额一律以「分/最小货币单位」integer 传入。
+%%%
+%%% create_payment/2 返回打 tag 的 map（调用方据 type 分支）：
+%%%   支付宝 App   : #{type => alipay_app,            order_str    => binary()}
+%%%   微信 JSAPI   : #{type => wechat_jsapi,          prepay_id    => binary()}
+%%%   微信 Native  : #{type => wechat_native,         code_url     => binary()}
+%%%   Stripe       : #{type => stripe_payment_intent, payment_no   => binary(),
+%%%                    client_secret => binary()}
+%%%
+%%% verify_notify/2 返回验签（含微信 AES-GCM 解密）后的明文事件 map。
+%%%
+%%% Ctx :: #{headers => map(), body => binary(), form => map()}
+%%%   - 微信/Stripe 用 headers + body（原始字节验签）
+%%%   - 支付宝异步通知用 form（已 url-decode 的表单 map）
+%%% @end
+%%%===================================================================
+
+-callback create_payment(Cfg :: map(), Order :: map()) ->
+    {ok, map()} | {error, binary()}.
+
+-callback refund(Cfg :: map(), RefundReq :: map()) ->
+    {ok, map()} | {error, binary()}.
+
+-callback verify_notify(Cfg :: map(), Ctx :: map()) ->
+    {ok, map()} | {error, atom()}.
+
+%% 客户端二次签名（仅部分网关需要，如微信 JSAPI paySign）
+-callback build_pay_sign(Cfg :: map(), Args :: map()) ->
+    {ok, map()} | {error, binary()}.
+
+-optional_callbacks([build_pay_sign/2]).
