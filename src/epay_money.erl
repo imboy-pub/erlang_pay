@@ -96,7 +96,18 @@ parse_nonneg(B) ->
 
 -spec parse_frac(binary()) -> non_neg_integer().
 parse_frac(<<>>) -> 0;
-parse_frac(B) -> binary_to_integer(B).
+parse_frac(B) ->
+    true = is_all_digits(B),
+    binary_to_integer(B).
+
+%% 小数串必须全为 ASCII 数字，杜绝带符号（如 <<"-3">>/<<"+5">>）静默算错金额。
+-spec is_all_digits(binary()) -> boolean().
+is_all_digits(<<>>) -> false;
+is_all_digits(B) -> is_all_digits_1(B).
+
+is_all_digits_1(<<>>) -> true;
+is_all_digits_1(<<C, Rest/binary>>) when C >= $0, C =< $9 -> is_all_digits_1(Rest);
+is_all_digits_1(_) -> false.
 
 -spec pow10(non_neg_integer()) -> pos_integer().
 pow10(0) -> 1;

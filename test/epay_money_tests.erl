@@ -43,7 +43,11 @@ to_minor_unsupported_currency_test() ->
 
 to_minor_invalid_amount_test() ->
     ?assertMatch({error, {invalid_amount, _}}, epay_money:to_minor(<<"abc">>, <<"USD">>)),
-    ?assertMatch({error, {invalid_amount, _}}, epay_money:to_minor(<<"-1.00">>, <<"USD">>)).
+    ?assertMatch({error, {invalid_amount, _}}, epay_money:to_minor(<<"-1.00">>, <<"USD">>)),
+    %% 小数位带符号/非数字字符必须拒绝，防止静默算错金额。
+    ?assertMatch({error, {invalid_amount, _}}, epay_money:to_minor(<<"12.-3">>, <<"USD">>)),
+    ?assertMatch({error, {invalid_amount, _}}, epay_money:to_minor(<<"1.+5">>, <<"USD">>)),
+    ?assertMatch({error, {invalid_amount, _}}, epay_money:to_minor(<<"1.2x">>, <<"USD">>)).
 
 to_major_2decimals_test() ->
     ?assertEqual({ok, <<"12.34">>}, epay_money:to_major(1234, <<"USD">>)),
