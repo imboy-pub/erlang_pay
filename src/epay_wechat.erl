@@ -34,7 +34,7 @@
 
 %% @doc 下单。Order :: #{out_trade_no, amount_fen, description => binary(),
 %%   pay_type => jsapi | native, openid => binary()(jsapi 必填)}
--spec create_payment(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec create_payment(map(), map()) -> {ok, map()} | epay_gateway:err().
 create_payment(Cfg, Order) ->
     case maps:get(pay_type, Order, jsapi) of
         native ->
@@ -54,14 +54,14 @@ create_payment(Cfg, Order) ->
     end.
 
 %% @doc 回调验签 + AES-GCM 解密。Ctx :: #{headers := map(), body := binary()}。
--spec verify_notify(map(), map()) -> {ok, map()} | {error, atom()}.
+-spec verify_notify(map(), map()) -> {ok, map()} | epay_gateway:err().
 verify_notify(Cfg, Ctx) ->
     Headers = maps:get(headers, Ctx, #{}),
     Body = maps:get(body, Ctx, <<>>),
     verify_notify(Cfg, Headers, Body).
 
 %% @doc 客户端 JSAPI 二次签名。Args :: #{prepay_id := binary()}。
--spec build_pay_sign(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec build_pay_sign(map(), map()) -> {ok, map()} | epay_gateway:err().
 build_pay_sign(Cfg, Args) ->
     build_jsapi_pay_sign(Cfg, maps:get(prepay_id, Args)).
 -define(PATH_JSAPI, <<"/v3/pay/transactions/jsapi">>).
@@ -75,22 +75,22 @@ build_pay_sign(Cfg, Args) ->
 %%%===================================================================
 
 %% @doc JSAPI 下单。Order :: #{out_trade_no, amount_fen, description, openid}
--spec jsapi_prepay(map(), map()) -> {ok, #{prepay_id := binary()}} | {error, binary()}.
+-spec jsapi_prepay(map(), map()) -> {ok, #{prepay_id := binary()}} | epay_gateway:err().
 jsapi_prepay(Cfg, Order) ->
     Body = jsapi_body(Cfg, Order),
     case post_signed(Cfg, ?PATH_JSAPI, Body) of
         {ok, #{<<"prepay_id">> := PrepayId}} -> {ok, #{prepay_id => PrepayId}};
-        {ok, _} -> {error, <<"微信下单响应缺少 prepay_id"/utf8>>};
+        {ok, _} -> {error, {invalid_response, <<"微信下单响应缺少 prepay_id"/utf8>>}};
         {error, _} = Err -> Err
     end.
 
 %% @doc Native 下单（扫码）。Order :: #{out_trade_no, amount_fen, description}
--spec native_prepay(map(), map()) -> {ok, #{code_url := binary()}} | {error, binary()}.
+-spec native_prepay(map(), map()) -> {ok, #{code_url := binary()}} | epay_gateway:err().
 native_prepay(Cfg, Order) ->
     Body = native_body(Cfg, Order),
     case post_signed(Cfg, ?PATH_NATIVE, Body) of
         {ok, #{<<"code_url">> := CodeUrl}} -> {ok, #{code_url => CodeUrl}};
-        {ok, _} -> {error, <<"微信下单响应缺少 code_url"/utf8>>};
+        {ok, _} -> {error, {invalid_response, <<"微信下单响应缺少 code_url"/utf8>>}};
         {error, _} = Err -> Err
     end.
 
@@ -119,7 +119,7 @@ base_order_map(Cfg, Order) ->
     }.
 
 %% @doc 客户端 JSAPI 调起二次签名。返回 #{appId,timeStamp,nonceStr,package,signType,paySign}
--spec build_jsapi_pay_sign(map(), binary()) -> {ok, map()} | {error, binary()}.
+-spec build_jsapi_pay_sign(map(), binary()) -> {ok, map()} | epay_gateway:err().
 build_jsapi_pay_sign(Cfg, PrepayId) ->
     AppId = maps:get(app_id, Cfg),
     PriKey = maps:get(private_key, Cfg),
@@ -139,7 +139,7 @@ build_jsapi_pay_sign(Cfg, PrepayId) ->
                 <<"paySign">> => base64:encode(Sig)
             }};
         {error, _} ->
-            {error, <<"微信 paySign 签名失败"/utf8>>}
+            {error, {sign_failed, <<"微信 paySign 签名失败"/utf8>>}}
     end.
 
 %%%===================================================================
@@ -148,14 +148,14 @@ build_jsapi_pay_sign(Cfg, PrepayId) ->
 
 %% @doc 退款。Req :: #{out_trade_no | transaction_id, out_refund_no,
 %%   refund_fen, total_fen, reason => binary()}
--spec refund(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec refund(map(), map()) -> {ok, map()} | epay_gateway:err().
 refund(Cfg, Req) ->
     Body = refund_body(Cfg, Req),
     case post_signed(Cfg, ?PATH_REFUND, Body) of
         {ok, #{<<"status">> := Status} = Resp} ->
             case lists:member(Status, [<<"SUCCESS">>, <<"PROCESSING">>]) of
                 true -> {ok, Resp};
-                false -> {error, <<"微信退款状态:"/utf8, Status/binary>>}
+                false -> {error, {gateway_error, <<"微信退款状态:"/utf8, Status/binary>>}}
             end;
         {ok, Resp} ->
             {ok, Resp};
@@ -189,7 +189,7 @@ refund_body(_Cfg, Req) ->
 
 %% @doc 验证回调签名（平台公钥）并解密 resource，返回明文 JSON map。
 %% Headers 为小写键 map（cowboy 已小写化）。
--spec verify_notify(map(), map(), binary()) -> {ok, map()} | {error, atom()}.
+-spec verify_notify(map(), map(), binary()) -> {ok, map()} | epay_gateway:err().
 verify_notify(Cfg, Headers, RawBody) ->
     Ts = header(Headers, <<"wechatpay-timestamp">>),
     Nonce = header(Headers, <<"wechatpay-nonce">>),
@@ -204,10 +204,10 @@ verify_notify(Cfg, Headers, RawBody) ->
                         {ok, SigBin} ->
                             case epay_crypto:rsa_verify_sha256(Message, SigBin, PubKey) of
                                 true -> decrypt_resource(Cfg, RawBody);
-                                false -> {error, bad_signature}
+                                false -> {error, {bad_signature, <<"微信回调验签失败"/utf8>>}}
                             end;
                         error ->
-                            {error, bad_signature}
+                            {error, {bad_signature, <<"微信回调签名 base64 解析失败"/utf8>>}}
                     end;
                 {error, _} = E ->
                     E
@@ -216,27 +216,28 @@ verify_notify(Cfg, Headers, RawBody) ->
             Err
     end.
 
--spec validate_notify_headers(binary(), binary(), binary(), binary()) -> ok | {error, atom()}.
-validate_notify_headers(<<>>, _, _, _) -> {error, missing_timestamp};
-validate_notify_headers(_, <<>>, _, _) -> {error, missing_nonce};
-validate_notify_headers(_, _, <<>>, _) -> {error, missing_signature};
-validate_notify_headers(_, _, _, <<>>) -> {error, no_credential};
+-spec validate_notify_headers(binary(), binary(), binary(), binary()) ->
+    ok | epay_gateway:err().
+validate_notify_headers(<<>>, _, _, _) -> {error, {missing_timestamp, <<"缺少回调时间戳头"/utf8>>}};
+validate_notify_headers(_, <<>>, _, _) -> {error, {missing_nonce, <<"缺少回调 nonce 头"/utf8>>}};
+validate_notify_headers(_, _, <<>>, _) -> {error, {missing_signature, <<"缺少回调签名头"/utf8>>}};
+validate_notify_headers(_, _, _, <<>>) -> {error, {no_credential, <<"缺少平台公钥"/utf8>>}};
 validate_notify_headers(_, _, _, _) -> ok.
 
--spec check_timestamp(binary()) -> ok | {error, atom()}.
+-spec check_timestamp(binary()) -> ok | epay_gateway:err().
 check_timestamp(TsBin) ->
     try
         Ts = binary_to_integer(TsBin),
         Now = erlang:system_time(second),
         case abs(Now - Ts) > ?NOTIFY_TOLERANCE of
-            true -> {error, timestamp_expired};
+            true -> {error, {timestamp_expired, <<"微信回调时间戳超出容差窗口"/utf8>>}};
             false -> ok
         end
     catch
-        _:_ -> {error, invalid_timestamp}
+        _:_ -> {error, {invalid_timestamp, <<"微信回调时间戳非法"/utf8>>}}
     end.
 
--spec decrypt_resource(map(), binary()) -> {ok, map()} | {error, atom()}.
+-spec decrypt_resource(map(), binary()) -> {ok, map()} | epay_gateway:err().
 decrypt_resource(Cfg, RawBody) ->
     ApiV3Key = maps:get(api_v3_key, Cfg, <<>>),
     case epay_util:json_decode(RawBody) of
@@ -248,21 +249,22 @@ decrypt_resource(Cfg, RawBody) ->
                 {ok, Plain} ->
                     case epay_util:json_decode(Plain) of
                         {ok, M} when is_map(M) -> {ok, M};
-                        _ -> {error, bad_plaintext}
+                        _ -> {error, {bad_plaintext, <<"微信回调明文非 JSON 对象"/utf8>>}}
                     end;
-                {error, _} = E ->
-                    E
+                {error, Reason} ->
+                    {error, {decrypt_failed, <<"微信回调 resource 解密失败:"/utf8,
+                        (atom_to_binary(Reason, utf8))/binary>>}}
             end;
         _ ->
-            {error, no_resource}
+            {error, {no_resource, <<"微信回调缺少 resource"/utf8>>}}
     end.
 
 %%%===================================================================
 %%% Internal —— APIv3 签名 + 出站
 %%%===================================================================
 
-%% 签名 + POST，返回解析后的 JSON map（2xx）或 {error, binary()}
--spec post_signed(map(), binary(), binary()) -> {ok, map()} | {error, binary()}.
+%% 签名 + POST，返回解析后的 JSON map（2xx）或 {error, {Code, Msg}}
+-spec post_signed(map(), binary(), binary()) -> {ok, map()} | epay_gateway:err().
 post_signed(Cfg, Path, Body) ->
     case sign_request(Cfg, <<"POST">>, Path, Body) of
         {ok, Auth} ->
@@ -281,16 +283,16 @@ post_signed(Cfg, Path, Body) ->
                     {error, http_err_bin(Reason)}
             end;
         {error, _} ->
-            {error, <<"微信请求签名失败"/utf8>>}
+            {error, {sign_failed, <<"微信请求签名失败"/utf8>>}}
     end.
 
--spec decode_ok(binary()) -> {ok, map()} | {error, binary()}.
+-spec decode_ok(binary()) -> {ok, map()} | epay_gateway:err().
 decode_ok(<<>>) ->
     {ok, #{}};
 decode_ok(RespBody) ->
     case epay_util:json_decode(RespBody) of
         {ok, M} when is_map(M) -> {ok, M};
-        _ -> {error, <<"微信响应解析失败"/utf8>>}
+        _ -> {error, {invalid_response, <<"微信响应解析失败"/utf8>>}}
     end.
 
 %% APIv3 请求签名：Method\nPath\nTimestamp\nNonce\nBody\n，商户私钥 SHA256withRSA
@@ -319,13 +321,16 @@ auth_header(MchId, Serial, Nonce, Timestamp, SignB64) ->
         "timestamp=\"", Timestamp/binary, "\",",
         "serial_no=\"", Serial/binary, "\"">>.
 
--spec wechat_err_msg(binary()) -> binary().
+%% 网关业务错误（HTTP 非 2xx）：取微信 message/code，打 {gateway_error, Msg}。
+-spec wechat_err_msg(binary()) -> {atom(), binary()}.
 wechat_err_msg(RespBody) ->
-    case epay_util:json_decode(RespBody) of
-        {ok, #{<<"message">> := Msg}} -> Msg;
-        {ok, #{<<"code">> := Code}} -> Code;
-        _ -> <<"微信接口错误"/utf8>>
-    end.
+    Msg =
+        case epay_util:json_decode(RespBody) of
+            {ok, #{<<"message">> := M}} -> M;
+            {ok, #{<<"code">> := Code}} -> Code;
+            _ -> <<"微信接口错误"/utf8>>
+        end,
+    {gateway_error, Msg}.
 
 -spec header(map(), binary()) -> binary().
 header(Headers, Key) ->
@@ -339,16 +344,17 @@ header(Headers, Key) ->
 safe_b64_decode(B) ->
     try {ok, base64:decode(B)} catch _:_ -> error end.
 
--spec http_err_bin(term()) -> binary().
+%% 传输层错误（inets）：打 {http_error, Msg}。
+-spec http_err_bin(term()) -> {atom(), binary()}.
 http_err_bin(R) ->
-    iolist_to_binary(io_lib:format("~p", [R])).
+    {http_error, iolist_to_binary(io_lib:format("~p", [R]))}.
 
 %%%===================================================================
 %%% 主动查单（GET /v3/pay/transactions/out-trade-no/{no}?mchid=）
 %%%===================================================================
 
 %% @doc 按商户订单号查单。Q :: #{out_trade_no := binary()}。
--spec query(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec query(map(), map()) -> {ok, map()} | epay_gateway:err().
 query(Cfg, Q) ->
     OutTradeNo = maps:get(out_trade_no, Q),
     MchId = maps:get(mch_id, Cfg),
@@ -363,7 +369,7 @@ query(Cfg, Q) ->
     end.
 
 %% @doc 申请交易账单下载地址。Req :: #{bill_date := binary(), bill_type => binary()}。
--spec download_bill(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec download_bill(map(), map()) -> {ok, map()} | epay_gateway:err().
 download_bill(Cfg, Req) ->
     BillDate = maps:get(bill_date, Req),
     BillType = maps:get(bill_type, Req, <<"ALL">>),
@@ -372,13 +378,13 @@ download_bill(Cfg, Req) ->
         {ok, #{<<"download_url">> := Url} = Resp} ->
             {ok, #{type => wechat_bill, download_url => Url, raw => Resp}};
         {ok, _Resp} ->
-            {error, <<"微信对账单响应缺少 download_url"/utf8>>};
+            {error, {invalid_response, <<"微信对账单响应缺少 download_url"/utf8>>}};
         {error, _} = Err ->
             Err
     end.
 
 %% APIv3 签名 + GET（查单/对账共用），复用 sign_request（Method=GET, Body=<<>>）。
--spec get_signed(map(), binary()) -> {ok, map()} | {error, binary()}.
+-spec get_signed(map(), binary()) -> {ok, map()} | epay_gateway:err().
 get_signed(Cfg, Path) ->
     case sign_request(Cfg, <<"GET">>, Path, <<>>) of
         {ok, Auth} ->
@@ -397,7 +403,7 @@ get_signed(Cfg, Path) ->
                     {error, http_err_bin(Reason)}
             end;
         {error, _} ->
-            {error, <<"微信请求签名失败"/utf8>>}
+            {error, {sign_failed, <<"微信请求签名失败"/utf8>>}}
     end.
 
 -spec map_wechat_state(binary()) -> atom().

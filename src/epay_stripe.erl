@@ -28,7 +28,7 @@
 %%%===================================================================
 
 %% @doc 下单（创建 PaymentIntent）。Order :: #{out_trade_no, amount_fen, currency => binary()}
--spec create_payment(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec create_payment(map(), map()) -> {ok, map()} | epay_gateway:err().
 create_payment(Cfg, Order) ->
     case create_payment_intent(Cfg, Order) of
         {ok, #{id := Id, client_secret := Secret}} ->
@@ -39,7 +39,7 @@ create_payment(Cfg, Order) ->
 
 %% @doc Webhook 验签。Ctx :: #{headers := map(), body := binary()}。
 %% 验签通过返回 {ok, EventMap}（已解析的 Stripe event JSON）。
--spec verify_notify(map(), map()) -> {ok, map()} | {error, atom()}.
+-spec verify_notify(map(), map()) -> {ok, map()} | epay_gateway:err().
 verify_notify(Cfg, Ctx) ->
     Headers = maps:get(headers, Ctx, #{}),
     Body = maps:get(body, Ctx, <<>>),
@@ -48,7 +48,7 @@ verify_notify(Cfg, Ctx) ->
         ok ->
             case epay_util:json_decode(Body) of
                 {ok, Event} when is_map(Event) -> {ok, Event};
-                _ -> {error, bad_event_json}
+                _ -> {error, {bad_event_json, <<"Stripe 事件 JSON 解析失败"/utf8>>}}
             end;
         {error, _} = Err ->
             Err
@@ -68,7 +68,7 @@ stripe_sig_header(Headers) ->
 
 %% @doc 创建 PaymentIntent。Req :: #{amount_fen, out_trade_no, currency => binary()}
 -spec create_payment_intent(map(), map()) ->
-    {ok, #{id := binary(), client_secret := binary()}} | {error, binary()}.
+    {ok, #{id := binary(), client_secret := binary()}} | epay_gateway:err().
 create_payment_intent(Cfg, Req) ->
     Currency = maps:get(currency, Req, maps:get(currency, Cfg, <<"usd">>)),
     OutTradeNo = maps:get(out_trade_no, Req),
@@ -93,13 +93,13 @@ create_payment_intent(Cfg, Req) ->
             {error, http_err_bin(Reason)}
     end.
 
--spec parse_payment_intent(binary()) -> {ok, map()} | {error, binary()}.
+-spec parse_payment_intent(binary()) -> {ok, map()} | epay_gateway:err().
 parse_payment_intent(Body) ->
     case epay_util:json_decode(Body) of
         {ok, #{<<"id">> := Id, <<"client_secret">> := Secret}} ->
             {ok, #{id => Id, client_secret => Secret}};
         _ ->
-            {error, <<"Stripe 响应缺少 id/client_secret"/utf8>>}
+            {error, {invalid_response, <<"Stripe 响应缺少 id/client_secret"/utf8>>}}
     end.
 
 %%%===================================================================
@@ -107,7 +107,7 @@ parse_payment_intent(Body) ->
 %%%===================================================================
 
 %% @doc 退款。Req :: #{payment_intent := binary(), amount_fen => integer()}
--spec refund(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec refund(map(), map()) -> {ok, map()} | epay_gateway:err().
 refund(Cfg, Req) ->
     Pi = maps:get(payment_intent, Req),
     Base = [{<<"payment_intent">>, Pi}],
@@ -128,18 +128,18 @@ refund(Cfg, Req) ->
             {error, http_err_bin(Reason)}
     end.
 
--spec parse_refund(binary()) -> {ok, map()} | {error, binary()}.
+-spec parse_refund(binary()) -> {ok, map()} | epay_gateway:err().
 parse_refund(Body) ->
     case epay_util:json_decode(Body) of
         {ok, #{<<"status">> := Status} = Resp} ->
             case lists:member(Status, [<<"succeeded">>, <<"pending">>]) of
                 true -> {ok, Resp};
-                false -> {error, <<"Stripe 退款状态:"/utf8, Status/binary>>}
+                false -> {error, {gateway_error, <<"Stripe 退款状态:"/utf8, Status/binary>>}}
             end;
         {ok, Resp} when is_map(Resp) ->
             {ok, Resp};
         _ ->
-            {error, <<"Stripe 退款响应解析失败"/utf8>>}
+            {error, {invalid_response, <<"Stripe 退款响应解析失败"/utf8>>}}
     end.
 
 %%%===================================================================
@@ -147,12 +147,12 @@ parse_refund(Body) ->
 %%%===================================================================
 
 %% @doc 验证 Stripe-Signature 头。SigHeader 形如 "t=NNN,v1=hex[,v1=hex2]"。
--spec verify_webhook(map(), binary(), binary()) -> ok | {error, atom()}.
+-spec verify_webhook(map(), binary(), binary()) -> ok | epay_gateway:err().
 verify_webhook(Cfg, SigHeader, RawBody) ->
     Secret = maps:get(webhook_secret, Cfg, <<>>),
     case Secret of
         <<>> ->
-            {error, no_credential};
+            {error, {no_credential, <<"缺少 Stripe webhook_secret"/utf8>>}};
         _ ->
             case parse_sig_header(SigHeader) of
                 {ok, TsBin, V1List} ->
@@ -161,18 +161,18 @@ verify_webhook(Cfg, SigHeader, RawBody) ->
                         {error, _} = E -> E
                     end;
                 error ->
-                    {error, malformed_signature}
+                    {error, {malformed_signature, <<"Stripe-Signature 头格式非法"/utf8>>}}
             end
     end.
 
--spec verify_v1(binary(), binary(), binary(), [binary()]) -> ok | {error, atom()}.
+-spec verify_v1(binary(), binary(), binary(), [binary()]) -> ok | epay_gateway:err().
 verify_v1(Secret, TsBin, RawBody, V1List) ->
     SignedPayload = <<TsBin/binary, ".", RawBody/binary>>,
     Expected = epay_crypto:hmac_sha256_hex(Secret, SignedPayload),
     %% 任一 v1 匹配即通过（Stripe 轮换期可能多个 v1），逐一常量时间比较
     case lists:any(fun(V1) -> epay_crypto:constant_time_equal(Expected, V1) end, V1List) of
         true -> ok;
-        false -> {error, bad_signature}
+        false -> {error, {bad_signature, <<"Stripe webhook 验签失败"/utf8>>}}
     end.
 
 %% 解析 "t=NNN,v1=aaa,v1=bbb,v0=..." -> {ok, <<"NNN">>, [<<"aaa">>,<<"bbb">>]}
@@ -198,17 +198,17 @@ parse_sig_header(Header) when is_binary(Header) ->
 parse_sig_header(_) ->
     error.
 
--spec check_timestamp(binary()) -> ok | {error, atom()}.
+-spec check_timestamp(binary()) -> ok | epay_gateway:err().
 check_timestamp(TsBin) ->
     try
         Ts = binary_to_integer(TsBin),
         Now = erlang:system_time(second),
         case abs(Now - Ts) > ?WEBHOOK_TOLERANCE of
-            true -> {error, timestamp_expired};
+            true -> {error, {timestamp_expired, <<"Stripe webhook 时间戳超出容差窗口"/utf8>>}};
             false -> ok
         end
     catch
-        _:_ -> {error, invalid_timestamp}
+        _:_ -> {error, {invalid_timestamp, <<"Stripe webhook 时间戳非法"/utf8>>}}
     end.
 
 %%%===================================================================
@@ -223,23 +223,27 @@ bearer(Cfg) ->
 base_url(Cfg) ->
     maps:get(base_url, Cfg, ?BASE_URL).
 
--spec stripe_err_msg(binary()) -> binary().
+%% 网关业务错误（HTTP 非 2xx）：取 Stripe error.message，打 {gateway_error, Msg}。
+-spec stripe_err_msg(binary()) -> {atom(), binary()}.
 stripe_err_msg(Body) ->
-    case epay_util:json_decode(Body) of
-        {ok, #{<<"error">> := #{<<"message">> := Msg}}} -> Msg;
-        _ -> <<"Stripe 接口错误"/utf8>>
-    end.
+    Msg =
+        case epay_util:json_decode(Body) of
+            {ok, #{<<"error">> := #{<<"message">> := M}}} -> M;
+            _ -> <<"Stripe 接口错误"/utf8>>
+        end,
+    {gateway_error, Msg}.
 
--spec http_err_bin(term()) -> binary().
+%% 传输层错误（inets）：打 {http_error, Msg}。
+-spec http_err_bin(term()) -> {atom(), binary()}.
 http_err_bin(R) ->
-    iolist_to_binary(io_lib:format("~p", [R])).
+    {http_error, iolist_to_binary(io_lib:format("~p", [R]))}.
 
 %%%===================================================================
 %%% 主动查单（GET /v1/payment_intents/{id}）
 %%%===================================================================
 
 %% @doc 查 PaymentIntent 状态。Q :: #{payment_intent := binary()}。
--spec query(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec query(map(), map()) -> {ok, map()} | epay_gateway:err().
 query(Cfg, Q) ->
     PiId = maps:get(payment_intent, Q),
     Url = <<(base_url(Cfg))/binary, "/v1/payment_intents/", PiId/binary>>,
@@ -253,7 +257,7 @@ query(Cfg, Q) ->
             {error, http_err_bin(Reason)}
     end.
 
--spec parse_intent(binary()) -> {ok, map()} | {error, binary()}.
+-spec parse_intent(binary()) -> {ok, map()} | epay_gateway:err().
 parse_intent(Body) ->
     case epay_util:json_decode(Body) of
         {ok, #{<<"status">> := St} = Resp} ->
@@ -261,7 +265,7 @@ parse_intent(Body) ->
         {ok, Resp} when is_map(Resp) ->
             {ok, #{trade_state => unknown, raw => Resp}};
         _ ->
-            {error, <<"Stripe 查询响应解析失败"/utf8>>}
+            {error, {invalid_response, <<"Stripe 查询响应解析失败"/utf8>>}}
     end.
 
 -spec map_stripe_state(binary()) -> atom().
@@ -280,7 +284,7 @@ map_stripe_state(_) -> unknown.
 
 %% @doc 创建对账报告任务。Req :: #{report_type => binary(),
 %%   interval_start => integer(), interval_end => integer()}。
--spec download_bill(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec download_bill(map(), map()) -> {ok, map()} | epay_gateway:err().
 download_bill(Cfg, Req) ->
     ReportType = maps:get(report_type, Req, <<"balance.summary.1">>),
     Form = epay_util:form_encode(bill_pairs(ReportType, Req)),
@@ -305,12 +309,12 @@ bill_pairs(ReportType, Req) ->
 maybe_param(_Key, undefined, Acc) -> Acc;
 maybe_param(Key, Ts, Acc) when is_integer(Ts) -> Acc ++ [{Key, integer_to_binary(Ts)}].
 
--spec parse_report_run(binary()) -> {ok, map()} | {error, binary()}.
+-spec parse_report_run(binary()) -> {ok, map()} | epay_gateway:err().
 parse_report_run(Body) ->
     case epay_util:json_decode(Body) of
         {ok, #{<<"id">> := Id} = Resp} ->
             {ok, #{type => stripe_report_run, report_run_id => Id,
                    status => maps:get(<<"status">>, Resp, <<>>), raw => Resp}};
         _ ->
-            {error, <<"Stripe 报告响应缺少 id"/utf8>>}
+            {error, {invalid_response, <<"Stripe 报告响应缺少 id"/utf8>>}}
     end.

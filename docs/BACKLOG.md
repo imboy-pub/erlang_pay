@@ -45,7 +45,7 @@
 
 ## P2 — 一致性与通用库交付打磨
 
-### T05 [TODO] 统一错误返回 {error, {Code::atom(), Msg::binary()}}
+### T05 [DONE] 统一错误返回 {error, {Code::atom(), Msg::binary()}}
 - 目标：消除 `create/refund` 返 `{error,binary()}` 与 `verify_notify` 返 `{error,atom()}` 的不一致。统一为 `{error, {Code, Msg}}`：Code 供程序判断语义，Msg 供展示。
 - 验收：gate 绿；门面与三网关全部对齐；更新 README 与 spec；EUnit 覆盖错误分支。
 
@@ -75,4 +75,5 @@
 - 2026-06-14 T02 DONE — query/2 主动查单：epay_gateway 加 query callback；三网关实现（微信 GET out-trade-no、支付宝 alipay.trade.query、Stripe GET payment_intents）；epay_http 加 get/2,3；门面 query/3 分发；trade_state 统一 atom。epay_query_tests 13 个 meck EUnit。
 - 2026-06-14 T03 DONE — epay_money 多币种 exponent：ISO 4217 表（14 币种 2/0/3 位）；to_minor/to_major 整数运算杜绝浮点误差；非法币种/小数超位/负数校验。epay_money_tests 16 个 EUnit。
 - 2026-06-14 T04 DONE — download_bill/2 对账：epay_gateway 加 download_bill callback；三网关实现（微信 tradebill、支付宝 bill.downloadurl.query、Stripe report_runs）；门面 download_bill/3。支付宝 query/download_bill 抽出 build_params/do_open_request 共用。epay_bill_tests 8 个 meck EUnit。gate 绿（54 EUnit）。
+- 2026-06-14 T05 DONE — 统一错误返回 {error, {Code::atom(), Msg::binary()}}：behaviour 定义 err/0 类型并导出；门面 erlang_pay 与三网关全部错误返回点对齐（gateway_error/http_error/invalid_response/sign_failed/no_credential/bad_signature/timestamp_expired/decrypt_failed/unsupported/unknown_gateway…）；底层原语 epay_crypto/epay_util/epay_money 保留各自被测错误词汇（不在本范围）；epay_query_tests 加 2 个能力/未知网关 build_pay_sign 错误用例 + 收紧 http_error/gateway_error 断言。gate 绿（56 EUnit）。
 - ⚠️ 2026-06-14 恢复说明 — T02/T03/T04 此前多轮"提交"实为 sandbox 幻影未落真实 git（真实 git 此前仅 T01 89af42b）；本次经 Edit/Write 在真实 FS 重建全部并一次性提交。教训：源码改动必须用 Edit/Write 工具，禁用 Bash 脚本改源码（落 sandbox 不持久）；gate/commit 须 sandbox 禁用。

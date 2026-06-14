@@ -28,6 +28,7 @@
 ]).
 
 -type gateway() :: alipay | wechat | stripe.
+-type err() :: epay_gateway:err().
 
 -spec version() -> binary().
 version() ->
@@ -35,47 +36,47 @@ version() ->
 
 %% @doc 下单。返回打 tag 的 map（type 区分支付宝 orderStr / 微信 prepay_id /
 %% Stripe client_secret）。Order 见各网关模块文档。
--spec create_payment(gateway(), map(), map()) -> {ok, map()} | {error, binary()}.
+-spec create_payment(gateway(), map(), map()) -> {ok, map()} | err().
 create_payment(Gateway, Cfg, Order) ->
     dispatch(Gateway, fun(Mod) -> Mod:create_payment(Cfg, Order) end).
 
 %% @doc 退款。
--spec refund(gateway(), map(), map()) -> {ok, map()} | {error, binary()}.
+-spec refund(gateway(), map(), map()) -> {ok, map()} | err().
 refund(Gateway, Cfg, RefundReq) ->
     dispatch(Gateway, fun(Mod) -> Mod:refund(Cfg, RefundReq) end).
 
 %% @doc 主动查单。返回打 tag 的 map，含统一 trade_state（success/pending/
 %% closed/refunded/revoked/error/unknown）。
--spec query(gateway(), map(), map()) -> {ok, map()} | {error, binary()}.
+-spec query(gateway(), map(), map()) -> {ok, map()} | err().
 query(Gateway, Cfg, Query) ->
     dispatch(Gateway, fun(Mod) -> Mod:query(Cfg, Query) end).
 
 %% @doc 申请对账/结算文件。返回打 tag 的 map（微信/支付宝含 download_url，
 %% Stripe 含 report_run_id）。调用方据此下载并逐笔比对。
--spec download_bill(gateway(), map(), map()) -> {ok, map()} | {error, binary()}.
+-spec download_bill(gateway(), map(), map()) -> {ok, map()} | err().
 download_bill(Gateway, Cfg, Req) ->
     dispatch(Gateway, fun(Mod) -> Mod:download_bill(Cfg, Req) end).
 
 %% @doc 回调验签 + 解密，返回明文事件 map。
 %% Ctx :: #{headers => map(), body => binary(), form => map()}
--spec verify_notify(gateway(), map(), map()) -> {ok, map()} | {error, atom()}.
+-spec verify_notify(gateway(), map(), map()) -> {ok, map()} | err().
 verify_notify(Gateway, Cfg, Ctx) ->
     case gateway_module(Gateway) of
         {ok, Mod} -> Mod:verify_notify(Cfg, Ctx);
-        {error, _} -> {error, unknown_gateway}
+        {error, _} -> {error, {unknown_gateway, <<"未知支付网关"/utf8>>}}
     end.
 
 %% @doc 客户端二次签名（仅部分网关支持，如微信 JSAPI paySign）。
--spec build_pay_sign(gateway(), map(), map()) -> {ok, map()} | {error, binary()}.
+-spec build_pay_sign(gateway(), map(), map()) -> {ok, map()} | err().
 build_pay_sign(Gateway, Cfg, Args) ->
     case gateway_module(Gateway) of
         {ok, Mod} ->
             case erlang:function_exported(Mod, build_pay_sign, 2) of
                 true -> Mod:build_pay_sign(Cfg, Args);
-                false -> {error, <<"该网关不支持客户端二次签名"/utf8>>}
+                false -> {error, {unsupported, <<"该网关不支持客户端二次签名"/utf8>>}}
             end;
         {error, _} ->
-            {error, <<"未知支付网关"/utf8>>}
+            {error, {unknown_gateway, <<"未知支付网关"/utf8>>}}
     end.
 
 %% @doc gateway 原子 → 实现模块。
@@ -89,10 +90,10 @@ gateway_module(_) -> {error, unknown_gateway}.
 %%% Internal
 %%%===================================================================
 
--spec dispatch(gateway(), fun((module()) -> {ok, map()} | {error, binary()})) ->
-    {ok, map()} | {error, binary()}.
+-spec dispatch(gateway(), fun((module()) -> {ok, map()} | err())) ->
+    {ok, map()} | err().
 dispatch(Gateway, Fun) ->
     case gateway_module(Gateway) of
         {ok, Mod} -> Fun(Mod);
-        {error, _} -> {error, <<"未知支付网关"/utf8>>}
+        {error, _} -> {error, {unknown_gateway, <<"未知支付网关"/utf8>>}}
     end.

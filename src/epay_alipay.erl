@@ -28,7 +28,7 @@
 %%%===================================================================
 
 %% @doc 下单。Order :: #{out_trade_no, amount_fen, subject => binary()}
--spec create_payment(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec create_payment(map(), map()) -> {ok, map()} | epay_gateway:err().
 create_payment(Cfg, Order) ->
     OrderNo = maps:get(out_trade_no, Order),
     AmountFen = maps:get(amount_fen, Order),
@@ -42,7 +42,7 @@ create_payment(Cfg, Order) ->
 
 %% @doc 回调验签。Ctx :: #{form := map()}（已 url-decode 的异步通知表单）。
 %% 验签通过返回 {ok, FormMap}（含 out_trade_no/trade_no/trade_status/...）。
--spec verify_notify(map(), map()) -> {ok, map()} | {error, atom()}.
+-spec verify_notify(map(), map()) -> {ok, map()} | epay_gateway:err().
 verify_notify(Cfg, Ctx) ->
     Form = maps:get(form, Ctx, #{}),
     case verify_form(Cfg, Form) of
@@ -56,7 +56,7 @@ verify_notify(Cfg, Ctx) ->
 
 %% @doc 生成 App 支付 orderStr。AmountFen 单位分；Opts 可含 subject。
 -spec app_pay(map(), binary(), integer(), map()) ->
-    {ok, #{order_str := binary()}} | {error, binary()}.
+    {ok, #{order_str := binary()}} | epay_gateway:err().
 app_pay(Cfg, OrderNo, AmountFen, Opts) ->
     #{app_id := AppId, private_key := PriKey} = Cfg,
     Subject = maps:get(subject, Opts, <<"充值"/utf8>>),
@@ -90,7 +90,7 @@ app_pay(Cfg, OrderNo, AmountFen, Opts) ->
 
 %% @doc 退款。Req :: #{out_trade_no := binary(), refund_amount_fen := integer(),
 %%   out_request_no => binary(), refund_reason => binary()}
--spec refund(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec refund(map(), map()) -> {ok, map()} | epay_gateway:err().
 refund(Cfg, Req) ->
     #{app_id := AppId, private_key := PriKey} = Cfg,
     OutTradeNo = maps:get(out_trade_no, Req),
@@ -120,18 +120,18 @@ refund(Cfg, Req) ->
             normalize_err(Err)
     end.
 
--spec do_refund_request(binary(), binary()) -> {ok, map()} | {error, binary()}.
+-spec do_refund_request(binary(), binary()) -> {ok, map()} | epay_gateway:err().
 do_refund_request(Url, Body) ->
     case epay_http:post_form(Url, [], Body) of
         {ok, 200, _H, RespBody} ->
             parse_refund_response(RespBody);
         {ok, Status, _H, _B} ->
-            {error, <<"支付宝退款 HTTP "/utf8, (integer_to_binary(Status))/binary>>};
+            {error, {gateway_error, <<"支付宝退款 HTTP "/utf8, (integer_to_binary(Status))/binary>>}};
         {error, Reason} ->
             {error, http_err_bin(Reason)}
     end.
 
--spec parse_refund_response(binary()) -> {ok, map()} | {error, binary()}.
+-spec parse_refund_response(binary()) -> {ok, map()} | epay_gateway:err().
 parse_refund_response(RespBody) ->
     case epay_util:json_decode(RespBody) of
         {ok, #{?REFUND_RESP_KEY := Resp}} when is_map(Resp) ->
@@ -140,10 +140,10 @@ parse_refund_response(RespBody) ->
                     {ok, Resp};
                 _ ->
                     SubMsg = maps:get(<<"sub_msg">>, Resp, maps:get(<<"msg">>, Resp, <<"退款失败"/utf8>>)),
-                    {error, SubMsg}
+                    {error, {gateway_error, SubMsg}}
             end;
         _ ->
-            {error, <<"支付宝退款响应解析失败"/utf8>>}
+            {error, {invalid_response, <<"支付宝退款响应解析失败"/utf8>>}}
     end.
 
 %%%===================================================================
@@ -151,23 +151,23 @@ parse_refund_response(RespBody) ->
 %%%===================================================================
 
 %% @doc 验证支付宝异步通知签名。Params 为已 url-decode 的表单 map（binary k/v）。
--spec verify_form(map(), map()) -> ok | {error, atom()}.
+-spec verify_form(map(), map()) -> ok | epay_gateway:err().
 verify_form(Cfg, Params) ->
     PubKey = maps:get(public_key, Cfg, <<>>),
     Sign = maps:get(<<"sign">>, Params, <<>>),
     case {PubKey, Sign} of
-        {<<>>, _} -> {error, no_credential};
-        {_, <<>>} -> {error, missing_signature};
+        {<<>>, _} -> {error, {no_credential, <<"缺少支付宝公钥"/utf8>>}};
+        {_, <<>>} -> {error, {missing_signature, <<"缺少通知签名"/utf8>>}};
         _ ->
             Content = verify_content(Params),
             case safe_b64_decode(Sign) of
                 {ok, SigBin} ->
                     case epay_crypto:rsa_verify_sha256(Content, SigBin, PubKey) of
                         true -> ok;
-                        false -> {error, bad_signature}
+                        false -> {error, {bad_signature, <<"支付宝通知验签失败"/utf8>>}}
                     end;
                 error ->
-                    {error, bad_signature}
+                    {error, {bad_signature, <<"支付宝通知签名 base64 解析失败"/utf8>>}}
             end
     end.
 
@@ -246,13 +246,15 @@ now_beijing() ->
 safe_b64_decode(B) ->
     try {ok, base64:decode(B)} catch _:_ -> error end.
 
--spec normalize_err({error, atom()}) -> {error, binary()}.
+%% 本地签名失败（crypto 返回的 atom 原因）：打 {sign_failed, Msg}。
+-spec normalize_err({error, atom()}) -> epay_gateway:err().
 normalize_err({error, A}) when is_atom(A) ->
-    {error, <<"支付宝签名失败:"/utf8, (atom_to_binary(A, utf8))/binary>>}.
+    {error, {sign_failed, <<"支付宝签名失败:"/utf8, (atom_to_binary(A, utf8))/binary>>}}.
 
--spec http_err_bin(term()) -> binary().
+%% 传输层错误（inets）：打 {http_error, Msg}。
+-spec http_err_bin(term()) -> {atom(), binary()}.
 http_err_bin(R) ->
-    iolist_to_binary(io_lib:format("~p", [R])).
+    {http_error, iolist_to_binary(io_lib:format("~p", [R]))}.
 
 %%%===================================================================
 %%% 主动查单（alipay.trade.query）与对账单下载
@@ -262,7 +264,7 @@ http_err_bin(R) ->
 -define(BILL_RESP_KEY, <<"alipay_data_dataservice_bill_downloadurl_query_response">>).
 
 %% @doc 查单。Q :: #{out_trade_no := binary()}。
--spec query(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec query(map(), map()) -> {ok, map()} | epay_gateway:err().
 query(Cfg, Q) ->
     #{app_id := AppId, private_key := PriKey} = Cfg,
     OutTradeNo = maps:get(out_trade_no, Q),
@@ -277,7 +279,7 @@ query(Cfg, Q) ->
     end.
 
 %% @doc 申请账单下载地址。Req :: #{bill_date := binary(), bill_type => binary()}。
--spec download_bill(map(), map()) -> {ok, map()} | {error, binary()}.
+-spec download_bill(map(), map()) -> {ok, map()} | epay_gateway:err().
 download_bill(Cfg, Req) ->
     #{app_id := AppId, private_key := PriKey} = Cfg,
     BillType = maps:get(bill_type, Req, <<"trade">>),
@@ -308,19 +310,19 @@ build_params(AppId, Method, Biz) ->
 
 %% 发请求 + 取响应业务节点 + code 校验 + 委托 OkFun 构造成功返回。
 -spec do_open_request(binary(), binary(), binary(), fun((map()) -> map())) ->
-    {ok, map()} | {error, binary()}.
+    {ok, map()} | epay_gateway:err().
 do_open_request(Url, Body, RespKey, OkFun) ->
     case epay_http:post_form(Url, [], Body) of
         {ok, 200, _H, RespBody} ->
             parse_open_response(RespBody, RespKey, OkFun);
         {ok, Status, _H, _B} ->
-            {error, <<"支付宝接口 HTTP "/utf8, (integer_to_binary(Status))/binary>>};
+            {error, {gateway_error, <<"支付宝接口 HTTP "/utf8, (integer_to_binary(Status))/binary>>}};
         {error, Reason} ->
             {error, http_err_bin(Reason)}
     end.
 
 -spec parse_open_response(binary(), binary(), fun((map()) -> map())) ->
-    {ok, map()} | {error, binary()}.
+    {ok, map()} | epay_gateway:err().
 parse_open_response(RespBody, RespKey, OkFun) ->
     case epay_util:json_decode(RespBody) of
         {ok, #{RespKey := Resp}} when is_map(Resp) ->
@@ -329,12 +331,13 @@ parse_open_response(RespBody, RespKey, OkFun) ->
                     {ok, OkFun(Resp)};
                 _ ->
                     {error,
-                        maps:get(
-                            <<"sub_msg">>, Resp, maps:get(<<"msg">>, Resp, <<"接口失败"/utf8>>)
-                        )}
+                        {gateway_error,
+                            maps:get(
+                                <<"sub_msg">>, Resp, maps:get(<<"msg">>, Resp, <<"接口失败"/utf8>>)
+                            )}}
             end;
         _ ->
-            {error, <<"支付宝响应解析失败"/utf8>>}
+            {error, {invalid_response, <<"支付宝响应解析失败"/utf8>>}}
     end.
 
 -spec query_ok(map()) -> map().

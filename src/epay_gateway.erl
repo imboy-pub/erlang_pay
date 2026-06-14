@@ -22,25 +22,32 @@
 %%% @end
 %%%===================================================================
 
+%% 统一错误返回：{error, {Code::atom(), Msg::binary()}}
+%%   Code 供程序判断语义（如 gateway_error/http_error/invalid_response/
+%%   bad_signature/no_credential/unsupported/unknown_gateway…），Msg 供展示。
+-type err() :: {error, {atom(), binary()}}.
+
 -callback create_payment(Cfg :: map(), Order :: map()) ->
-    {ok, map()} | {error, binary()}.
+    {ok, map()} | err().
 
 -callback refund(Cfg :: map(), RefundReq :: map()) ->
-    {ok, map()} | {error, binary()}.
+    {ok, map()} | err().
 
 %% 主动查单，返回统一 #{trade_state := atom(), ...}
 -callback query(Cfg :: map(), Query :: map()) ->
-    {ok, map()} | {error, binary()}.
+    {ok, map()} | err().
 
 %% 申请对账/结算文件（返回 download_url 或报告任务 id）
 -callback download_bill(Cfg :: map(), Req :: map()) ->
-    {ok, map()} | {error, binary()}.
+    {ok, map()} | err().
 
 -callback verify_notify(Cfg :: map(), Ctx :: map()) ->
-    {ok, map()} | {error, atom()}.
+    {ok, map()} | err().
 
 %% 客户端二次签名（仅部分网关需要，如微信 JSAPI paySign）
 -callback build_pay_sign(Cfg :: map(), Args :: map()) ->
-    {ok, map()} | {error, binary()}.
+    {ok, map()} | err().
+
+-export_type([err/0]).
 
 -optional_callbacks([build_pay_sign/2]).

@@ -104,7 +104,7 @@ facade_bill_dispatch_test() ->
     end).
 
 facade_bill_unknown_gateway_test() ->
-    ?assertEqual(
-        {error, <<"未知支付网关"/utf8>>},
+    ?assertMatch(
+        {error, {unknown_gateway, _}},
         erlang_pay:download_bill(foobar, #{}, #{})
     ).

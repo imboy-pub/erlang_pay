@@ -74,7 +74,10 @@ wechat_unknown_state_test() ->
 wechat_http_error_test() ->
     with_mocks(fun() ->
         meck:expect(epay_http, get, fun(_, _) -> {error, timeout} end),
-        ?assertMatch({error, _}, epay_wechat:query(?WX_CFG, #{out_trade_no => <<"X1">>}))
+        %% T05：传输层错误统一为 {error, {http_error, Msg}}
+        ?assertMatch(
+            {error, {http_error, _}}, epay_wechat:query(?WX_CFG, #{out_trade_no => <<"X1">>})
+        )
     end).
 
 %%%-------------------------------------------------------------------
@@ -127,8 +130,9 @@ alipay_wait_test() ->
 
 alipay_biz_error_test() ->
     with_mocks(fun() ->
+        %% T05：网关业务错误统一为 {error, {gateway_error, Msg}}
         ?assertMatch(
-            {error, _},
+            {error, {gateway_error, _}},
             al_query(
                 <<"{\"alipay_trade_query_response\":{\"code\":\"40004\",\"sub_msg\":\"交易不存在\"}}"/utf8>>
             )
@@ -148,7 +152,21 @@ facade_dispatch_test() ->
     end).
 
 facade_unknown_gateway_test() ->
-    ?assertEqual(
-        {error, <<"未知支付网关"/utf8>>},
+    ?assertMatch(
+        {error, {unknown_gateway, _}},
         erlang_pay:query(foobar, #{}, #{})
+    ).
+
+%% T05：不支持的能力（Stripe 无 build_pay_sign/2）统一为 {error, {unsupported, _}}
+facade_build_pay_sign_unsupported_test() ->
+    ?assertMatch(
+        {error, {unsupported, _}},
+        erlang_pay:build_pay_sign(stripe, ?ST_CFG, #{})
+    ).
+
+%% T05：未知网关二次签名 → {error, {unknown_gateway, _}}
+facade_build_pay_sign_unknown_test() ->
+    ?assertMatch(
+        {error, {unknown_gateway, _}},
+        erlang_pay:build_pay_sign(foobar, #{}, #{})
     ).
