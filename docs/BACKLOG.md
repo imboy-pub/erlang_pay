@@ -53,7 +53,7 @@
 - 目标：每网关导出 `capabilities() -> [create_payment|refund|query|...]`；门面据此判断能力，替代 `build_pay_sign` 的 `function_exported` 反射探测（更显式、可在启动期校验）。
 - 验收：gate 绿；EUnit 验证不支持能力返回明确错误。
 
-### T07 [TODO] close/2 + cancel/2 关单撤单
+### T07 [DONE] close/2 + cancel/2 关单撤单
 - 目标：`epay_gateway` 加 `close/2`（关单）、`cancel/2`（撤单）optional callback；按各网关支持度实现。
 - 验收：gate 绿；meck EUnit。
 
@@ -77,4 +77,5 @@
 - 2026-06-14 T04 DONE — download_bill/2 对账：epay_gateway 加 download_bill callback；三网关实现（微信 tradebill、支付宝 bill.downloadurl.query、Stripe report_runs）；门面 download_bill/3。支付宝 query/download_bill 抽出 build_params/do_open_request 共用。epay_bill_tests 8 个 meck EUnit。gate 绿（54 EUnit）。
 - 2026-06-14 T05 DONE — 统一错误返回 {error, {Code::atom(), Msg::binary()}}：behaviour 定义 err/0 类型并导出；门面 erlang_pay 与三网关全部错误返回点对齐（gateway_error/http_error/invalid_response/sign_failed/no_credential/bad_signature/timestamp_expired/decrypt_failed/unsupported/unknown_gateway…）；底层原语 epay_crypto/epay_util/epay_money 保留各自被测错误词汇（不在本范围）；epay_query_tests 加 2 个能力/未知网关 build_pay_sign 错误用例 + 收紧 http_error/gateway_error 断言。gate 绿（56 EUnit）。
 - 2026-06-14 T06 DONE — capabilities/0 能力声明：behaviour 加 capabilities/0 callback；三网关各显式列能力（微信含 build_pay_sign，支付宝/Stripe 不含）；门面 build_pay_sign 用 lists:member(Mod:capabilities()) 替代 function_exported 反射；门面新增 capabilities/1 + supports/2。epay_capabilities_tests 7 个纯函数 EUnit。gate 绿（63 EUnit）。
+- 2026-06-14 T07 DONE — close/2 关单 + cancel/2 撤单：behaviour 加 close/cancel optional callback；按支持度实现（微信 close、支付宝 close+cancel 共用 trade_action、Stripe cancel）；各网关 capabilities 同步登记；门面 close/3 + cancel/3 经 cap_dispatch 能力门控（不支持→unsupported）。epay_close_cancel_tests 9 个 meck EUnit。gate 绿（72 EUnit）。
 - ⚠️ 2026-06-14 恢复说明 — T02/T03/T04 此前多轮"提交"实为 sandbox 幻影未落真实 git（真实 git 此前仅 T01 89af42b）；本次经 Edit/Write 在真实 FS 重建全部并一次性提交。教训：源码改动必须用 Edit/Write 工具，禁用 Bash 脚本改源码（落 sandbox 不持久）；gate/commit 须 sandbox 禁用。

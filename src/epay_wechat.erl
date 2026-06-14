@@ -24,17 +24,29 @@
 %% epay_gateway behaviour
 -export([
     create_payment/2, refund/2, verify_notify/2, build_pay_sign/2, query/2, download_bill/2,
-    capabilities/0
+    close/2, capabilities/0
 ]).
 %% 低层 API（直接使用）
 -export([jsapi_prepay/2, native_prepay/2, build_jsapi_pay_sign/2, verify_notify/3]).
 
 -define(BASE_URL, <<"https://api.mch.weixin.qq.com">>).
 
-%% @doc 能力声明。微信支持 JSAPI 客户端二次签名（paySign）。
+%% @doc 能力声明。微信支持 JSAPI 客户端二次签名（paySign）与关单（无独立撤单）。
 -spec capabilities() -> [atom()].
 capabilities() ->
-    [create_payment, refund, query, download_bill, verify_notify, build_pay_sign].
+    [create_payment, refund, query, download_bill, verify_notify, build_pay_sign, close].
+
+%% @doc 关单。Req :: #{out_trade_no := binary()}。微信关单成功返回 204 无 body。
+-spec close(map(), map()) -> {ok, map()} | epay_gateway:err().
+close(Cfg, Req) ->
+    OutTradeNo = maps:get(out_trade_no, Req),
+    MchId = maps:get(mch_id, Cfg),
+    Path = <<"/v3/pay/transactions/out-trade-no/", OutTradeNo/binary, "/close">>,
+    Body = epay_util:json_encode(#{<<"mchid">> => MchId}),
+    case post_signed(Cfg, Path, Body) of
+        {ok, _} -> {ok, #{type => wechat_close, out_trade_no => OutTradeNo}};
+        {error, _} = Err -> Err
+    end.
 
 %%%===================================================================
 %%% epay_gateway behaviour

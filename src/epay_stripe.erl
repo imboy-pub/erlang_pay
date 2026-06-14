@@ -16,17 +16,47 @@
 %%%===================================================================
 
 %% epay_gateway behaviour
--export([create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2, capabilities/0]).
+-export([
+    create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2,
+    cancel/2, capabilities/0
+]).
 %% 低层 API（直接使用）
 -export([create_payment_intent/2, verify_webhook/3]).
 
 -define(BASE_URL, <<"https://api.stripe.com">>).
 -define(WEBHOOK_TOLERANCE, 300).
 
-%% @doc 能力声明。Stripe 无客户端二次签名（PaymentIntent client_secret 直用）。
+%% @doc 能力声明。Stripe 无客户端二次签名（client_secret 直用）；PaymentIntent
+%% 以 cancel 撤销（无独立关单语义，cancel 即终止）。
 -spec capabilities() -> [atom()].
 capabilities() ->
-    [create_payment, refund, query, download_bill, verify_notify].
+    [create_payment, refund, query, download_bill, verify_notify, cancel].
+
+%% @doc 撤单（取消 PaymentIntent）。Req :: #{payment_intent := binary()}。
+-spec cancel(map(), map()) -> {ok, map()} | epay_gateway:err().
+cancel(Cfg, Req) ->
+    PiId = maps:get(payment_intent, Req),
+    Url = <<(base_url(Cfg))/binary, "/v1/payment_intents/", PiId/binary, "/cancel">>,
+    Headers = [{<<"Authorization">>, bearer(Cfg)}],
+    case epay_http:post_form(Url, Headers, <<>>) of
+        {ok, Status, _H, Body} when Status >= 200, Status < 300 ->
+            parse_cancel(Body);
+        {ok, _S, _H, Body} ->
+            {error, stripe_err_msg(Body)};
+        {error, Reason} ->
+            {error, http_err_bin(Reason)}
+    end.
+
+-spec parse_cancel(binary()) -> {ok, map()} | epay_gateway:err().
+parse_cancel(Body) ->
+    case epay_util:json_decode(Body) of
+        {ok, #{<<"status">> := St} = Resp} ->
+            {ok, #{type => stripe_cancel, raw_state => St, raw => Resp}};
+        {ok, Resp} when is_map(Resp) ->
+            {ok, #{type => stripe_cancel, raw => Resp}};
+        _ ->
+            {error, {invalid_response, <<"Stripe 取消响应解析失败"/utf8>>}}
+    end.
 
 %%%===================================================================
 %%% epay_gateway behaviour

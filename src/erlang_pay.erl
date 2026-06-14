@@ -26,7 +26,9 @@
     query/3,
     download_bill/3,
     capabilities/1,
-    supports/2
+    supports/2,
+    close/3,
+    cancel/3
 ]).
 
 -type gateway() :: alipay | wechat | stripe.
@@ -98,6 +100,16 @@ supports(Gateway, Capability) ->
         {error, _} -> false
     end.
 
+%% @doc 关单（未支付订单主动关闭）。仅 capabilities 含 close 的网关支持。
+-spec close(gateway(), map(), map()) -> {ok, map()} | err().
+close(Gateway, Cfg, Req) ->
+    cap_dispatch(Gateway, close, fun(Mod) -> Mod:close(Cfg, Req) end).
+
+%% @doc 撤单（已下单未支付/超时撤销）。仅 capabilities 含 cancel 的网关支持。
+-spec cancel(gateway(), map(), map()) -> {ok, map()} | err().
+cancel(Gateway, Cfg, Req) ->
+    cap_dispatch(Gateway, cancel, fun(Mod) -> Mod:cancel(Cfg, Req) end).
+
 %% @doc gateway 原子 → 实现模块。
 -spec gateway_module(gateway()) -> {ok, module()} | {error, unknown_gateway}.
 gateway_module(alipay) -> {ok, epay_alipay};
@@ -115,4 +127,18 @@ dispatch(Gateway, Fun) ->
     case gateway_module(Gateway) of
         {ok, Mod} -> Fun(Mod);
         {error, _} -> {error, {unknown_gateway, <<"未知支付网关"/utf8>>}}
+    end.
+
+%% 能力门控分发：网关须在 capabilities/0 中声明 Cap，否则返回 unsupported。
+-spec cap_dispatch(gateway(), atom(), fun((module()) -> {ok, map()} | err())) ->
+    {ok, map()} | err().
+cap_dispatch(Gateway, Cap, Fun) ->
+    case gateway_module(Gateway) of
+        {ok, Mod} ->
+            case lists:member(Cap, Mod:capabilities()) of
+                true -> Fun(Mod);
+                false -> {error, {unsupported, <<"该网关不支持该操作"/utf8>>}}
+            end;
+        {error, _} ->
+            {error, {unknown_gateway, <<"未知支付网关"/utf8>>}}
     end.

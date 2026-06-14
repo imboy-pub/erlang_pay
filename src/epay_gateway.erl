@@ -48,6 +48,14 @@
 -callback build_pay_sign(Cfg :: map(), Args :: map()) ->
     {ok, map()} | err().
 
+%% 关单：未支付订单主动关闭（微信 close、支付宝 alipay.trade.close）
+-callback close(Cfg :: map(), Req :: map()) ->
+    {ok, map()} | err().
+
+%% 撤单：已下单未支付/超时撤销（支付宝 alipay.trade.cancel、Stripe cancel）
+-callback cancel(Cfg :: map(), Req :: map()) ->
+    {ok, map()} | err().
+
 %% 能力声明：每网关显式列出支持的动作（atom），门面据此判断而非 function_exported
 %% 反射探测。可在启动期校验，亦便于调用方按能力分支。
 %% 取值如：create_payment | refund | query | download_bill | verify_notify |
@@ -56,4 +64,4 @@
 
 -export_type([err/0]).
 
--optional_callbacks([build_pay_sign/2]).
+-optional_callbacks([build_pay_sign/2, close/2, cancel/2]).

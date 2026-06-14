@@ -16,17 +16,56 @@
 %%%===================================================================
 
 %% epay_gateway behaviour
--export([create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2, capabilities/0]).
+-export([
+    create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2,
+    close/2, cancel/2, capabilities/0
+]).
 %% 低层 API（直接使用）
 -export([app_pay/4, verify_form/2]).
 
 -define(DEFAULT_GATEWAY, <<"https://openapi.alipay.com/gateway.do">>).
 -define(REFUND_RESP_KEY, <<"alipay_trade_refund_response">>).
+-define(CLOSE_RESP_KEY, <<"alipay_trade_close_response">>).
+-define(CANCEL_RESP_KEY, <<"alipay_trade_cancel_response">>).
 
-%% @doc 能力声明。App 支付 orderStr 由服务端签名后客户端直用，无独立二次签名。
+%% @doc 能力声明。App 支付 orderStr 由服务端签名后客户端直用，无独立二次签名；
+%% 支付宝支持关单（alipay.trade.close）与撤单（alipay.trade.cancel）。
 -spec capabilities() -> [atom()].
 capabilities() ->
-    [create_payment, refund, query, download_bill, verify_notify].
+    [create_payment, refund, query, download_bill, verify_notify, close, cancel].
+
+%% @doc 关单（alipay.trade.close）。Req :: #{out_trade_no := binary()}。
+-spec close(map(), map()) -> {ok, map()} | epay_gateway:err().
+close(Cfg, Req) ->
+    trade_action(Cfg, Req, <<"alipay.trade.close">>, ?CLOSE_RESP_KEY, fun close_ok/1).
+
+%% @doc 撤单（alipay.trade.cancel）。Req :: #{out_trade_no := binary()}。
+-spec cancel(map(), map()) -> {ok, map()} | epay_gateway:err().
+cancel(Cfg, Req) ->
+    trade_action(Cfg, Req, <<"alipay.trade.cancel">>, ?CANCEL_RESP_KEY, fun cancel_ok/1).
+
+%% close/cancel 共用：按 out_trade_no 构造 biz、签名、发请求、解析。
+-spec trade_action(map(), map(), binary(), binary(), fun((map()) -> map())) ->
+    {ok, map()} | epay_gateway:err().
+trade_action(Cfg, Req, Method, RespKey, OkFun) ->
+    #{app_id := AppId, private_key := PriKey} = Cfg,
+    Biz = #{<<"out_trade_no">> => maps:get(out_trade_no, Req)},
+    Params = build_params(AppId, Method, Biz),
+    case sign_params(Params, PriKey) of
+        {ok, Signed} ->
+            Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
+            do_open_request(Url, build_query(Signed), RespKey, OkFun);
+        {error, _} = Err ->
+            normalize_err(Err)
+    end.
+
+-spec close_ok(map()) -> map().
+close_ok(Resp) ->
+    #{type => alipay_close, raw => Resp}.
+
+-spec cancel_ok(map()) -> map().
+cancel_ok(Resp) ->
+    #{type => alipay_cancel, action => maps:get(<<"action">>, Resp, <<>>), raw => Resp}.
 
 %%%===================================================================
 %%% epay_gateway behaviour
