@@ -16,7 +16,7 @@
 %%%===================================================================
 
 %% epay_gateway behaviour
--export([create_payment/2, refund/2, verify_notify/2]).
+-export([create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2]).
 %% 低层 API（直接使用）
 -export([create_payment_intent/2, verify_webhook/3]).
 
@@ -233,3 +233,84 @@ stripe_err_msg(Body) ->
 -spec http_err_bin(term()) -> binary().
 http_err_bin(R) ->
     iolist_to_binary(io_lib:format("~p", [R])).
+
+%%%===================================================================
+%%% 主动查单（GET /v1/payment_intents/{id}）
+%%%===================================================================
+
+%% @doc 查 PaymentIntent 状态。Q :: #{payment_intent := binary()}。
+-spec query(map(), map()) -> {ok, map()} | {error, binary()}.
+query(Cfg, Q) ->
+    PiId = maps:get(payment_intent, Q),
+    Url = <<(base_url(Cfg))/binary, "/v1/payment_intents/", PiId/binary>>,
+    Headers = [{<<"Authorization">>, bearer(Cfg)}],
+    case epay_http:get(Url, Headers) of
+        {ok, Status, _H, Body} when Status >= 200, Status < 300 ->
+            parse_intent(Body);
+        {ok, _S, _H, Body} ->
+            {error, stripe_err_msg(Body)};
+        {error, Reason} ->
+            {error, http_err_bin(Reason)}
+    end.
+
+-spec parse_intent(binary()) -> {ok, map()} | {error, binary()}.
+parse_intent(Body) ->
+    case epay_util:json_decode(Body) of
+        {ok, #{<<"status">> := St} = Resp} ->
+            {ok, #{trade_state => map_stripe_state(St), raw_state => St, raw => Resp}};
+        {ok, Resp} when is_map(Resp) ->
+            {ok, #{trade_state => unknown, raw => Resp}};
+        _ ->
+            {error, <<"Stripe 查询响应解析失败"/utf8>>}
+    end.
+
+-spec map_stripe_state(binary()) -> atom().
+map_stripe_state(<<"succeeded">>) -> success;
+map_stripe_state(<<"processing">>) -> pending;
+map_stripe_state(<<"requires_payment_method">>) -> pending;
+map_stripe_state(<<"requires_confirmation">>) -> pending;
+map_stripe_state(<<"requires_action">>) -> pending;
+map_stripe_state(<<"requires_capture">>) -> pending;
+map_stripe_state(<<"canceled">>) -> closed;
+map_stripe_state(_) -> unknown.
+
+%%%===================================================================
+%%% 对账（Reporting：POST /v1/reporting/report_runs）
+%%%===================================================================
+
+%% @doc 创建对账报告任务。Req :: #{report_type => binary(),
+%%   interval_start => integer(), interval_end => integer()}。
+-spec download_bill(map(), map()) -> {ok, map()} | {error, binary()}.
+download_bill(Cfg, Req) ->
+    ReportType = maps:get(report_type, Req, <<"balance.summary.1">>),
+    Form = epay_util:form_encode(bill_pairs(ReportType, Req)),
+    Headers = [{<<"Authorization">>, bearer(Cfg)}],
+    Url = <<(base_url(Cfg))/binary, "/v1/reporting/report_runs">>,
+    case epay_http:post_form(Url, Headers, Form) of
+        {ok, Status, _H, Body} when Status >= 200, Status < 300 ->
+            parse_report_run(Body);
+        {ok, _S, _H, Body} ->
+            {error, stripe_err_msg(Body)};
+        {error, Reason} ->
+            {error, http_err_bin(Reason)}
+    end.
+
+-spec bill_pairs(binary(), map()) -> [{binary(), binary()}].
+bill_pairs(ReportType, Req) ->
+    Base = [{<<"report_type">>, ReportType}],
+    P1 = maybe_param(<<"parameters[interval_start]">>, maps:get(interval_start, Req, undefined), Base),
+    maybe_param(<<"parameters[interval_end]">>, maps:get(interval_end, Req, undefined), P1).
+
+-spec maybe_param(binary(), integer() | undefined, [{binary(), binary()}]) -> [{binary(), binary()}].
+maybe_param(_Key, undefined, Acc) -> Acc;
+maybe_param(Key, Ts, Acc) when is_integer(Ts) -> Acc ++ [{Key, integer_to_binary(Ts)}].
+
+-spec parse_report_run(binary()) -> {ok, map()} | {error, binary()}.
+parse_report_run(Body) ->
+    case epay_util:json_decode(Body) of
+        {ok, #{<<"id">> := Id} = Resp} ->
+            {ok, #{type => stripe_report_run, report_run_id => Id,
+                   status => maps:get(<<"status">>, Resp, <<>>), raw => Resp}};
+        _ ->
+            {error, <<"Stripe 报告响应缺少 id"/utf8>>}
+    end.

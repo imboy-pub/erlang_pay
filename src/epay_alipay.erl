@@ -16,7 +16,7 @@
 %%%===================================================================
 
 %% epay_gateway behaviour
--export([create_payment/2, refund/2, verify_notify/2]).
+-export([create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2]).
 %% 低层 API（直接使用）
 -export([app_pay/4, verify_form/2]).
 
@@ -253,3 +253,102 @@ normalize_err({error, A}) when is_atom(A) ->
 -spec http_err_bin(term()) -> binary().
 http_err_bin(R) ->
     iolist_to_binary(io_lib:format("~p", [R])).
+
+%%%===================================================================
+%%% 主动查单（alipay.trade.query）与对账单下载
+%%%===================================================================
+
+-define(QUERY_RESP_KEY, <<"alipay_trade_query_response">>).
+-define(BILL_RESP_KEY, <<"alipay_data_dataservice_bill_downloadurl_query_response">>).
+
+%% @doc 查单。Q :: #{out_trade_no := binary()}。
+-spec query(map(), map()) -> {ok, map()} | {error, binary()}.
+query(Cfg, Q) ->
+    #{app_id := AppId, private_key := PriKey} = Cfg,
+    OutTradeNo = maps:get(out_trade_no, Q),
+    Biz = #{<<"out_trade_no">> => OutTradeNo},
+    Params = build_params(AppId, <<"alipay.trade.query">>, Biz),
+    case sign_params(Params, PriKey) of
+        {ok, Signed} ->
+            Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
+            do_open_request(Url, build_query(Signed), ?QUERY_RESP_KEY, fun query_ok/1);
+        {error, _} = Err ->
+            normalize_err(Err)
+    end.
+
+%% @doc 申请账单下载地址。Req :: #{bill_date := binary(), bill_type => binary()}。
+-spec download_bill(map(), map()) -> {ok, map()} | {error, binary()}.
+download_bill(Cfg, Req) ->
+    #{app_id := AppId, private_key := PriKey} = Cfg,
+    BillType = maps:get(bill_type, Req, <<"trade">>),
+    BillDate = maps:get(bill_date, Req),
+    Biz = #{<<"bill_type">> => BillType, <<"bill_date">> => BillDate},
+    Params = build_params(AppId, <<"alipay.data.dataservice.bill.downloadurl.query">>, Biz),
+    case sign_params(Params, PriKey) of
+        {ok, Signed} ->
+            Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
+            do_open_request(Url, build_query(Signed), ?BILL_RESP_KEY, fun bill_ok/1);
+        {error, _} = Err ->
+            normalize_err(Err)
+    end.
+
+%% 构造支付宝开放平台公共请求参数。
+-spec build_params(binary(), binary(), map()) -> map().
+build_params(AppId, Method, Biz) ->
+    #{
+        <<"app_id">> => AppId,
+        <<"method">> => Method,
+        <<"format">> => <<"JSON">>,
+        <<"charset">> => <<"utf-8">>,
+        <<"sign_type">> => <<"RSA2">>,
+        <<"timestamp">> => now_beijing(),
+        <<"version">> => <<"1.0">>,
+        <<"biz_content">> => epay_util:json_encode(Biz)
+    }.
+
+%% 发请求 + 取响应业务节点 + code 校验 + 委托 OkFun 构造成功返回。
+-spec do_open_request(binary(), binary(), binary(), fun((map()) -> map())) ->
+    {ok, map()} | {error, binary()}.
+do_open_request(Url, Body, RespKey, OkFun) ->
+    case epay_http:post_form(Url, [], Body) of
+        {ok, 200, _H, RespBody} ->
+            parse_open_response(RespBody, RespKey, OkFun);
+        {ok, Status, _H, _B} ->
+            {error, <<"支付宝接口 HTTP "/utf8, (integer_to_binary(Status))/binary>>};
+        {error, Reason} ->
+            {error, http_err_bin(Reason)}
+    end.
+
+-spec parse_open_response(binary(), binary(), fun((map()) -> map())) ->
+    {ok, map()} | {error, binary()}.
+parse_open_response(RespBody, RespKey, OkFun) ->
+    case epay_util:json_decode(RespBody) of
+        {ok, #{RespKey := Resp}} when is_map(Resp) ->
+            case maps:get(<<"code">>, Resp, <<>>) of
+                <<"10000">> ->
+                    {ok, OkFun(Resp)};
+                _ ->
+                    {error,
+                        maps:get(
+                            <<"sub_msg">>, Resp, maps:get(<<"msg">>, Resp, <<"接口失败"/utf8>>)
+                        )}
+            end;
+        _ ->
+            {error, <<"支付宝响应解析失败"/utf8>>}
+    end.
+
+-spec query_ok(map()) -> map().
+query_ok(Resp) ->
+    St = maps:get(<<"trade_status">>, Resp, <<>>),
+    #{trade_state => map_alipay_state(St), raw_state => St, raw => Resp}.
+
+-spec bill_ok(map()) -> map().
+bill_ok(Resp) ->
+    #{type => alipay_bill, download_url => maps:get(<<"bill_download_url">>, Resp, <<>>), raw => Resp}.
+
+-spec map_alipay_state(binary()) -> atom().
+map_alipay_state(<<"TRADE_SUCCESS">>) -> success;
+map_alipay_state(<<"TRADE_FINISHED">>) -> success;
+map_alipay_state(<<"WAIT_BUYER_PAY">>) -> pending;
+map_alipay_state(<<"TRADE_CLOSED">>) -> closed;
+map_alipay_state(_) -> unknown.

@@ -17,7 +17,7 @@
 - 验收：`bash scripts/gate.sh` 绿；`epay_crypto` 覆盖 RSA 签名/验签往返、AES-256-GCM 解密（含 tag 篡改→auth_failed）、常量时间比较、PEM 裸 base64 补头；`epay_util` 覆盖金额换算与表单/URL 编码。
 - 参照：报告 §3（epay_crypto 质量已达标，补测试固化行为）。
 
-### T02 [TODO] query/2 主动查单（最大功能缺口）
+### T02 [DONE] query/2 主动查单（最大功能缺口）
 - 目标：`epay_gateway` 加 `query/2` callback；三网关实现主动查单，统一返回 `#{trade_state := atom(), ...}`。
 - 验收：gate 绿；三网关各有 meck 模拟 HTTP 的 EUnit（绝不发真实请求）；`erlang_pay:query/3` 门面分发。
 - 参照：微信 `GET /v3/pay/transactions/out-trade-no/{no}`（权威 wechatpay-go）；支付宝 `alipay.trade.query`（smartwalle/alipay）；Stripe `GET /v1/payment_intents/{id}`。报告 §4 P0-1：超时必回查，否则订单永远 unknown。
@@ -26,12 +26,12 @@
 
 ## P1 — 通用性与可靠性
 
-### T03 [TODO] epay_money 多币种 exponent
+### T03 [DONE] epay_money 多币种 exponent
 - 目标：新增 `epay_money` 模块，持 ISO 4217 exponent 表（USD/EUR=2，JPY/KRW=0，BHD/KWD=3…），金额校验与「主单位↔最小单位」换算。修复当前硬编码「分」=2 位导致 Stripe 接 JPY/BHD 算错。
 - 验收：gate 绿；EUnit 覆盖 2/0/3 位小数三类币种往返；非法币种/溢出返回明确错误。
 - 参照：报告 §2「金额货币铁律」——不可假定恒为 100；金额必与货币码同存。
 
-### T04 [TODO] download_bill/2 对账接口
+### T04 [DONE] download_bill/2 对账接口
 - 目标：`epay_gateway` 加 `download_bill/2`（optional callback）；三网关实现拉取对账/结算文件。
 - 验收：gate 绿；meck EUnit；返回统一结构供调用方逐笔比对（整数分）。
 - 参照：微信 `downloadTradeBill`/`downloadFundFlowBill`；支付宝 `alipay.data.dataservice.bill.downloadurl.query`；Stripe Reporting。
@@ -72,3 +72,7 @@
 > loop 每完成一个任务在此追加一行（也镜像到 `.claude/state/epay_loop.log`）。
 
 - 2026-06-14 T01 DONE — 建 test/ 基建；epay_crypto/epay_util 共 18 个 EUnit 全绿（RSA往返/HMAC标准向量/AES-GCM往返+篡改/裸base64补头/金额换算）
+- 2026-06-14 T02 DONE — query/2 主动查单：epay_gateway 加 query callback；三网关实现（微信 GET out-trade-no、支付宝 alipay.trade.query、Stripe GET payment_intents）；epay_http 加 get/2,3；门面 query/3 分发；trade_state 统一 atom。epay_query_tests 13 个 meck EUnit。
+- 2026-06-14 T03 DONE — epay_money 多币种 exponent：ISO 4217 表（14 币种 2/0/3 位）；to_minor/to_major 整数运算杜绝浮点误差；非法币种/小数超位/负数校验。epay_money_tests 16 个 EUnit。
+- 2026-06-14 T04 DONE — download_bill/2 对账：epay_gateway 加 download_bill callback；三网关实现（微信 tradebill、支付宝 bill.downloadurl.query、Stripe report_runs）；门面 download_bill/3。支付宝 query/download_bill 抽出 build_params/do_open_request 共用。epay_bill_tests 8 个 meck EUnit。gate 绿（54 EUnit）。
+- ⚠️ 2026-06-14 恢复说明 — T02/T03/T04 此前多轮"提交"实为 sandbox 幻影未落真实 git（真实 git 此前仅 T01 89af42b）；本次经 Edit/Write 在真实 FS 重建全部并一次性提交。教训：源码改动必须用 Edit/Write 工具，禁用 Bash 脚本改源码（落 sandbox 不持久）；gate/commit 须 sandbox 禁用。

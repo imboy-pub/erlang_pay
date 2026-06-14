@@ -22,7 +22,9 @@
     refund/3,
     verify_notify/3,
     build_pay_sign/3,
-    gateway_module/1
+    gateway_module/1,
+    query/3,
+    download_bill/3
 ]).
 
 -type gateway() :: alipay | wechat | stripe.
@@ -41,6 +43,18 @@ create_payment(Gateway, Cfg, Order) ->
 -spec refund(gateway(), map(), map()) -> {ok, map()} | {error, binary()}.
 refund(Gateway, Cfg, RefundReq) ->
     dispatch(Gateway, fun(Mod) -> Mod:refund(Cfg, RefundReq) end).
+
+%% @doc 主动查单。返回打 tag 的 map，含统一 trade_state（success/pending/
+%% closed/refunded/revoked/error/unknown）。
+-spec query(gateway(), map(), map()) -> {ok, map()} | {error, binary()}.
+query(Gateway, Cfg, Query) ->
+    dispatch(Gateway, fun(Mod) -> Mod:query(Cfg, Query) end).
+
+%% @doc 申请对账/结算文件。返回打 tag 的 map（微信/支付宝含 download_url，
+%% Stripe 含 report_run_id）。调用方据此下载并逐笔比对。
+-spec download_bill(gateway(), map(), map()) -> {ok, map()} | {error, binary()}.
+download_bill(Gateway, Cfg, Req) ->
+    dispatch(Gateway, fun(Mod) -> Mod:download_bill(Cfg, Req) end).
 
 %% @doc 回调验签 + 解密，返回明文事件 map。
 %% Ctx :: #{headers => map(), body => binary(), form => map()}

@@ -22,7 +22,7 @@
 %%%===================================================================
 
 %% epay_gateway behaviour
--export([create_payment/2, refund/2, verify_notify/2, build_pay_sign/2]).
+-export([create_payment/2, refund/2, verify_notify/2, build_pay_sign/2, query/2, download_bill/2]).
 %% 低层 API（直接使用）
 -export([jsapi_prepay/2, native_prepay/2, build_jsapi_pay_sign/2, verify_notify/3]).
 
@@ -342,3 +342,70 @@ safe_b64_decode(B) ->
 -spec http_err_bin(term()) -> binary().
 http_err_bin(R) ->
     iolist_to_binary(io_lib:format("~p", [R])).
+
+%%%===================================================================
+%%% 主动查单（GET /v3/pay/transactions/out-trade-no/{no}?mchid=）
+%%%===================================================================
+
+%% @doc 按商户订单号查单。Q :: #{out_trade_no := binary()}。
+-spec query(map(), map()) -> {ok, map()} | {error, binary()}.
+query(Cfg, Q) ->
+    OutTradeNo = maps:get(out_trade_no, Q),
+    MchId = maps:get(mch_id, Cfg),
+    Path = <<"/v3/pay/transactions/out-trade-no/", OutTradeNo/binary, "?mchid=", MchId/binary>>,
+    case get_signed(Cfg, Path) of
+        {ok, #{<<"trade_state">> := St} = Resp} ->
+            {ok, #{trade_state => map_wechat_state(St), raw_state => St, raw => Resp}};
+        {ok, Resp} ->
+            {ok, #{trade_state => unknown, raw => Resp}};
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @doc 申请交易账单下载地址。Req :: #{bill_date := binary(), bill_type => binary()}。
+-spec download_bill(map(), map()) -> {ok, map()} | {error, binary()}.
+download_bill(Cfg, Req) ->
+    BillDate = maps:get(bill_date, Req),
+    BillType = maps:get(bill_type, Req, <<"ALL">>),
+    Path = <<"/v3/bill/tradebill?bill_date=", BillDate/binary, "&bill_type=", BillType/binary>>,
+    case get_signed(Cfg, Path) of
+        {ok, #{<<"download_url">> := Url} = Resp} ->
+            {ok, #{type => wechat_bill, download_url => Url, raw => Resp}};
+        {ok, _Resp} ->
+            {error, <<"微信对账单响应缺少 download_url"/utf8>>};
+        {error, _} = Err ->
+            Err
+    end.
+
+%% APIv3 签名 + GET（查单/对账共用），复用 sign_request（Method=GET, Body=<<>>）。
+-spec get_signed(map(), binary()) -> {ok, map()} | {error, binary()}.
+get_signed(Cfg, Path) ->
+    case sign_request(Cfg, <<"GET">>, Path, <<>>) of
+        {ok, Auth} ->
+            Url = <<(maps:get(base_url, Cfg, ?BASE_URL))/binary, Path/binary>>,
+            Headers = [
+                {<<"Authorization">>, Auth},
+                {<<"Accept">>, <<"application/json">>},
+                {<<"User-Agent">>, <<"erlang_pay/0.1.0">>}
+            ],
+            case epay_http:get(Url, Headers) of
+                {ok, Status, _H, RespBody} when Status >= 200, Status < 300 ->
+                    decode_ok(RespBody);
+                {ok, _Status, _H, RespBody} ->
+                    {error, wechat_err_msg(RespBody)};
+                {error, Reason} ->
+                    {error, http_err_bin(Reason)}
+            end;
+        {error, _} ->
+            {error, <<"微信请求签名失败"/utf8>>}
+    end.
+
+-spec map_wechat_state(binary()) -> atom().
+map_wechat_state(<<"SUCCESS">>) -> success;
+map_wechat_state(<<"REFUND">>) -> refunded;
+map_wechat_state(<<"NOTPAY">>) -> pending;
+map_wechat_state(<<"USERPAYING">>) -> pending;
+map_wechat_state(<<"CLOSED">>) -> closed;
+map_wechat_state(<<"REVOKED">>) -> revoked;
+map_wechat_state(<<"PAYERROR">>) -> error;
+map_wechat_state(_) -> unknown.

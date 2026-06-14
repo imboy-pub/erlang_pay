@@ -10,7 +10,7 @@
 %%% @end
 %%%===================================================================
 
--export([post_json/3, post_json/4, post_form/3, post_form/4]).
+-export([post_json/3, post_json/4, post_form/3, post_form/4, get/2, get/3]).
 
 -define(DEFAULT_TIMEOUT, 15000).
 -define(DEFAULT_CONNECT_TIMEOUT, 5000).
@@ -36,6 +36,29 @@ post_form(Url, Headers, Body) ->
 -spec post_form(binary() | string(), headers(), binary(), map()) -> result().
 post_form(Url, Headers, Body, Opts) ->
     request(Url, Headers, "application/x-www-form-urlencoded", Body, Opts).
+
+%% @doc GET（主动查单 / 对账用）。Headers 通常含 Authorization。无请求体。
+-spec get(binary() | string(), headers()) -> result().
+get(Url, Headers) ->
+    get(Url, Headers, #{}).
+
+-spec get(binary() | string(), headers(), map()) -> result().
+get(Url, Headers, Opts) ->
+    _ = application:ensure_all_started(ssl),
+    _ = application:ensure_all_started(inets),
+    UrlStr = to_list(Url),
+    HdrList = [{to_list(K), to_list(V)} || {K, V} <- Headers],
+    HttpOpts = [
+        {timeout, maps:get(timeout, Opts, ?DEFAULT_TIMEOUT)},
+        {connect_timeout, maps:get(connect_timeout, Opts, ?DEFAULT_CONNECT_TIMEOUT)},
+        {ssl, tls_opts()}
+    ],
+    case httpc:request(get, {UrlStr, HdrList}, HttpOpts, [{body_format, binary}]) of
+        {ok, {{_Ver, Status, _Reason}, RespHeaders, RespBody}} ->
+            {ok, Status, RespHeaders, ensure_binary(RespBody)};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %%%===================================================================
 %%% Internal

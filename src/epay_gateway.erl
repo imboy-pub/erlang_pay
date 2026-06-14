@@ -28,6 +28,14 @@
 -callback refund(Cfg :: map(), RefundReq :: map()) ->
     {ok, map()} | {error, binary()}.
 
+%% 主动查单，返回统一 #{trade_state := atom(), ...}
+-callback query(Cfg :: map(), Query :: map()) ->
+    {ok, map()} | {error, binary()}.
+
+%% 申请对账/结算文件（返回 download_url 或报告任务 id）
+-callback download_bill(Cfg :: map(), Req :: map()) ->
+    {ok, map()} | {error, binary()}.
+
 -callback verify_notify(Cfg :: map(), Ctx :: map()) ->
     {ok, map()} | {error, atom()}.
 
