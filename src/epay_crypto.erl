@@ -1,19 +1,19 @@
 -module(epay_crypto).
-%%%===================================================================
-%%% @doc 支付密码学原语 / Payment cryptographic primitives
-%%%
-%%% 仅依赖 OTP 内置 crypto / public_key，无第三方依赖。覆盖三家网关 live
-%%% 分支所需的全部算法（对标官方 wechatpay-go/utils 与 stripe-go）：
-%%%   - RSA SHA256withRSA(PKCS#1 v1.5) 签名/验签（支付宝 RSA2、微信 APIv3）
-%%%   - HMAC-SHA256（Stripe Webhook）
-%%%   - AES-256-GCM 解密（微信 v3 回调 resource 解密；APIv3 key 直用，无 KDF）
-%%%   - 常量时间比较（防时序攻击）
-%%%   - PEM 私钥/公钥解析（支持裸 base64 公钥自动补 PEM 头，适配支付宝）
-%%%   - 小写 hex（Stripe 签名为小写 hex）
-%%%
-%%% 安全约束：本模块不打印任何密钥/签名/明文；调用方亦不得将其入日志。
-%%% @end
-%%%===================================================================
+-moduledoc """
+支付密码学原语 / Payment cryptographic primitives
+
+仅依赖 OTP 内置 crypto / public_key，无第三方依赖。覆盖三家网关 live
+分支所需的全部算法（对标官方 wechatpay-go/utils 与 stripe-go）：
+
+- RSA SHA256withRSA(PKCS#1 v1.5) 签名/验签（支付宝 RSA2、微信 APIv3）
+- HMAC-SHA256（Stripe Webhook）
+- AES-256-GCM 解密（微信 v3 回调 resource 解密；APIv3 key 直用，无 KDF）
+- 常量时间比较（防时序攻击）
+- PEM 私钥/公钥解析（支持裸 base64 公钥自动补 PEM 头，适配支付宝）
+- 小写 hex（Stripe 签名为小写 hex）
+
+安全约束：本模块不打印任何密钥/签名/明文；调用方亦不得将其入日志。
+""".
 
 -export([
     rsa_sign_sha256/2,
@@ -32,9 +32,11 @@
 %%% RSA SHA256withRSA（PKCS#1 v1.5）
 %%%===================================================================
 
-%% @doc 用 PEM 私钥对 Message 做 SHA256withRSA 签名，返回原始签名字节。
-%% 支持 PKCS#1（-----BEGIN RSA PRIVATE KEY-----）与
-%% PKCS#8（-----BEGIN PRIVATE KEY-----）两种私钥格式。
+-doc """
+用 PEM 私钥对 Message 做 SHA256withRSA 签名，返回原始签名字节。
+支持 PKCS#1（`-----BEGIN RSA PRIVATE KEY-----`）与
+PKCS#8（`-----BEGIN PRIVATE KEY-----`）两种私钥格式。
+""".
 -spec rsa_sign_sha256(binary(), binary()) -> {ok, binary()} | {error, atom()}.
 rsa_sign_sha256(Message, PrivKeyPem) when is_binary(Message), is_binary(PrivKeyPem) ->
     case decode_private_key(PrivKeyPem) of
@@ -50,8 +52,10 @@ rsa_sign_sha256(Message, PrivKeyPem) when is_binary(Message), is_binary(PrivKeyP
 rsa_sign_sha256(_, _) ->
     {error, bad_args}.
 
-%% @doc 用 PEM 公钥（或 X.509 SubjectPublicKeyInfo / 裸 base64 公钥）验证
-%% SHA256withRSA 签名。Signature 为原始签名字节（非 base64/hex）。
+-doc """
+用 PEM 公钥（或 X.509 SubjectPublicKeyInfo / 裸 base64 公钥）验证
+SHA256withRSA 签名。Signature 为原始签名字节（非 base64/hex）。
+""".
 -spec rsa_verify_sha256(binary(), binary(), binary()) -> boolean().
 rsa_verify_sha256(Message, Signature, PubKeyPem) when
     is_binary(Message), is_binary(Signature), is_binary(PubKeyPem)
@@ -73,12 +77,12 @@ rsa_verify_sha256(_, _, _) ->
 %%% HMAC-SHA256
 %%%===================================================================
 
-%% @doc HMAC-SHA256，返回原始字节。
+-doc "HMAC-SHA256，返回原始字节。".
 -spec hmac_sha256(binary(), binary()) -> binary().
 hmac_sha256(Key, Data) when is_binary(Key), is_binary(Data) ->
     crypto:mac(hmac, sha256, Key, Data).
 
-%% @doc HMAC-SHA256，返回小写 hex（Stripe v1 签名格式）。
+-doc "HMAC-SHA256，返回小写 hex（Stripe v1 签名格式）。".
 -spec hmac_sha256_hex(binary(), binary()) -> binary().
 hmac_sha256_hex(Key, Data) ->
     lower_hex(hmac_sha256(Key, Data)).
@@ -87,10 +91,12 @@ hmac_sha256_hex(Key, Data) ->
 %%% AES-256-GCM 解密（微信 v3 回调 resource）
 %%%===================================================================
 
-%% @doc AES-256-GCM 解密。
-%% 微信约定：密文 = base64(密文 || 16 字节 GCM Tag)；Key=APIv3Key(32 字节，
-%% 直接使用，不做任何 KDF 派生)；Nonce/AAD 为明文字符串字节。
-%% Tag 校验失败（认证失败/密文被篡改）返回 {error, auth_failed}。
+-doc """
+AES-256-GCM 解密。
+微信约定：密文 = base64(密文 || 16 字节 GCM Tag)；Key=APIv3Key(32 字节，
+直接使用，不做任何 KDF 派生)；Nonce/AAD 为明文字符串字节。
+Tag 校验失败（认证失败/密文被篡改）返回 `{error, auth_failed}`。
+""".
 -spec aes_256_gcm_decrypt(binary(), binary(), binary(), binary()) ->
     {ok, binary()} | {error, atom()}.
 aes_256_gcm_decrypt(CipherB64, Key, Nonce, Aad) when
@@ -123,8 +129,10 @@ aes_256_gcm_decrypt(CipherB64, Key, Nonce, Aad) when
 %%% 常量时间比较 / 小写 hex / 随机串
 %%%===================================================================
 
-%% @doc 常量时间二进制比较，防时序侧信道。等长才逐字节异或累计；不等长直接
-%% false（长度本身非秘密）。
+-doc """
+常量时间二进制比较，防时序侧信道。等长才逐字节异或累计；不等长直接
+false（长度本身非秘密）。
+""".
 -spec constant_time_equal(binary(), binary()) -> boolean().
 constant_time_equal(A, B) when is_binary(A), is_binary(B) ->
     case byte_size(A) =:= byte_size(B) of
@@ -140,12 +148,12 @@ ct_equal(<<>>, <<>>, Acc) ->
 ct_equal(<<A, RA/binary>>, <<B, RB/binary>>, Acc) ->
     ct_equal(RA, RB, Acc bor (A bxor B)).
 
-%% @doc 原始字节转小写 hex。
+-doc "原始字节转小写 hex。".
 -spec lower_hex(binary()) -> binary().
 lower_hex(Bin) when is_binary(Bin) ->
     binary:encode_hex(Bin, lowercase).
 
-%% @doc 生成 N 字节强随机数的小写 hex 串（请求 nonce_str 用）。
+-doc "生成 N 字节强随机数的小写 hex 串（请求 nonce_str 用）。".
 -spec nonce(pos_integer()) -> binary().
 nonce(NBytes) when is_integer(NBytes), NBytes > 0 ->
     lower_hex(crypto:strong_rand_bytes(NBytes)).

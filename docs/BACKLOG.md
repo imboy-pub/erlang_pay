@@ -62,7 +62,7 @@
 - 验收：gate 绿；EUnit 覆盖过期时间戳→拒绝、窗口内→通过。
 - 参照：报告 §4 P2。
 
-### T10 [TODO] ex_doc 文档 + hex 发布就绪
+### T10 [DONE] ex_doc 文档 + hex 发布就绪
 - 目标：补全各模块 `@doc`/`-spec`；`rebar3 ex_doc` 生成无警告；校对 README/CHANGELOG；确认 hex 元数据（licenses/links/description）就绪。
 - 验收：`rebar3 ex_doc` 成功；gate 绿；README 与实际 API 一致（含本轮新增 query/money/对账）。
 
@@ -80,4 +80,5 @@
 - 2026-06-14 T07 DONE — close/2 关单 + cancel/2 撤单：behaviour 加 close/cancel optional callback；按支持度实现（微信 close、支付宝 close+cancel 共用 trade_action、Stripe cancel）；各网关 capabilities 同步登记；门面 close/3 + cancel/3 经 cap_dispatch 能力门控（不支持→unsupported）。epay_close_cancel_tests 9 个 meck EUnit。gate 绿（72 EUnit）。
 - 2026-06-14 T08 DONE — Stripe webhook 时间戳防重放：容差窗口由硬编码改为可经 Cfg webhook_tolerance 覆盖（默认 300s）；check_timestamp/2 接收容差；超窗（过期/未来）即拒。epay_webhook_tests 8 个真实 HMAC EUnit（窗口内通过/过期拒/未来拒/自定义容差/篡改签名/篡改 body/缺凭据/头非法），相对真实时钟取偏移确定性验证。gate 绿（80 EUnit）。
 - 2026-06-14 T09 DONE — epay_cert_mgr 证书自动轮换：可选 gen_server + 私有 ETS；多租户 ETS 键 {MchId,Serial}；add_merchant 注册并即时下载、refresh 强制刷新、send_after 周期轮换（默认 12h）；下载失败吞掉不崩溃（仍登记，下周期重试）；保持库纯函数核心（验签仍接受外部公钥，本模块仅可选附加）。epay_cert_mgr_tests 5 个 meck EUnit（缓存命中不重下/强制刷新重下/多租户隔离/not_found/下载失败回报但可补回）。gate 绿（85 EUnit）。
+- 2026-06-14 T10 DONE — ex_doc 文档 + hex 发布就绪：OTP 28 edoc chunks 严格化（模块 @doc 浮动到首函数致 "multiple @doc"、@doc 文本中 `<<"..">>` 触发 XML 解析错）；将 epay_money/epay_util/epay_http/epay_crypto 四个 leaf 模块迁移到 OTP 原生 `-moduledoc`/`-doc`（markdown，绕开 edoc XML）；其余模块 edoc @doc 无 XML 破坏字符故保留。README 补全 query/对账/关单撤单/能力查询/多币种/证书轮换章节 + 错误码表；CHANGELOG 并入本轮全部新增 API；app.src hex 元数据（description/licenses Apache-2.0/links）就绪。rebar3 ex_doc 零警告、rebar3 hex build 成功生成包+文档 tarball。gate 绿（85 EUnit）。
 - ⚠️ 2026-06-14 恢复说明 — T02/T03/T04 此前多轮"提交"实为 sandbox 幻影未落真实 git（真实 git 此前仅 T01 89af42b）；本次经 Edit/Write 在真实 FS 重建全部并一次性提交。教训：源码改动必须用 Edit/Write 工具，禁用 Bash 脚本改源码（落 sandbox 不持久）；gate/commit 须 sandbox 禁用。

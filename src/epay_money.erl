@@ -1,14 +1,13 @@
 -module(epay_money).
-%%%===================================================================
-%%% @doc 多币种金额换算 / ISO 4217 minor-unit conversion
-%%%
-%%% 金额货币铁律：最小单位与货币码同存，小数位数（exponent）随币种而变，
-%%% 不可假定恒为 2 位（×100）。USD/EUR/CNY=2，JPY/KRW=0，BHD/KWD=3。
-%%%
-%%% 为杜绝浮点误差，主单位一律以 binary 字符串传入/返回（如 <<"12.34">>），
-%%% 内部全程整数运算。最小单位为 integer（如 1234 表示 12.34 USD）。
-%%% @end
-%%%===================================================================
+-moduledoc """
+多币种金额换算 / ISO 4217 minor-unit conversion
+
+金额货币铁律：最小单位与货币码同存，小数位数（exponent）随币种而变，
+不可假定恒为 2 位（×100）。USD/EUR/CNY=2，JPY/KRW=0，BHD/KWD=3。
+
+为杜绝浮点误差，主单位一律以 binary 字符串传入/返回（如 `<<"12.34">>`），
+内部全程整数运算。最小单位为 integer（如 1234 表示 12.34 USD）。
+""".
 -export([exponent/1, to_minor/2, to_major/2]).
 
 -type currency() :: binary().
@@ -21,7 +20,7 @@
     <<"BHD">> => 3, <<"KWD">> => 3, <<"JOD">> => 3, <<"OMR">> => 3
 }).
 
-%% @doc 查币种小数位数。未知币种返回明确错误。
+-doc "查币种小数位数。未知币种返回明确错误。".
 -spec exponent(currency()) -> {ok, non_neg_integer()} | {error, {unsupported_currency, currency()}}.
 exponent(Cur) when is_binary(Cur) ->
     case maps:find(normalize(Cur), ?EXPONENTS) of
@@ -29,7 +28,9 @@ exponent(Cur) when is_binary(Cur) ->
         error -> {error, {unsupported_currency, Cur}}
     end.
 
-%% @doc 主单位字符串 → 最小单位整数。如 to_minor(<<"12.34">>, <<"USD">>) = {ok, 1234}。
+-doc """
+主单位字符串 → 最小单位整数。如 `to_minor(<<"12.34">>, <<"USD">>)` = `{ok, 1234}`。
+""".
 -spec to_minor(binary(), currency()) -> {ok, integer()} | {error, term()}.
 to_minor(Major, Cur) when is_binary(Major) ->
     case exponent(Cur) of
@@ -37,7 +38,9 @@ to_minor(Major, Cur) when is_binary(Major) ->
         {error, _} = Err -> Err
     end.
 
-%% @doc 最小单位整数 → 主单位字符串。如 to_major(1234, <<"USD">>) = {ok, <<"12.34">>}。
+-doc """
+最小单位整数 → 主单位字符串。如 `to_major(1234, <<"USD">>)` = `{ok, <<"12.34">>}`。
+""".
 -spec to_major(integer(), currency()) -> {ok, binary()} | {error, term()}.
 to_major(Minor, Cur) when is_integer(Minor), Minor >= 0 ->
     case exponent(Cur) of

@@ -1,14 +1,13 @@
 -module(epay_http).
-%%%===================================================================
-%%% @doc 支付出站 HTTP 客户端 / Outbound HTTP for payment gateways
-%%%
-%%% 基于 OTP httpc（同步、低频下单退款场景足够），强制 TLS 证书 + 主机名
-%%% 校验（防中间人劫持支付请求）。绝不打印请求/响应报文（含密钥/签名/单据）。
-%%%
-%%% 与 imboy 的 elib_req 区别：elib_req 硬编码 JSON、且 DEBUG 打印整个响应、
-%%% 未校验对端证书 —— 不可用于支付。本模块为支付专用安全客户端。
-%%% @end
-%%%===================================================================
+-moduledoc """
+支付出站 HTTP 客户端 / Outbound HTTP for payment gateways
+
+基于 OTP httpc（同步、低频下单退款场景足够），强制 TLS 证书 + 主机名
+校验（防中间人劫持支付请求）。绝不打印请求/响应报文（含密钥/签名/单据）。
+
+与 imboy 的 elib_req 区别：elib_req 硬编码 JSON、且 DEBUG 打印整个响应、
+未校验对端证书 —— 不可用于支付。本模块为支付专用安全客户端。
+""".
 
 -export([post_json/3, post_json/4, post_form/3, post_form/4, get/2, get/3]).
 
@@ -19,7 +18,7 @@
 -type result() :: {ok, Status :: pos_integer(), RespHeaders :: list(), Body :: binary()}
     | {error, term()}.
 
-%% @doc POST application/json。Body 为已序列化的 JSON 二进制。
+-doc "POST application/json。Body 为已序列化的 JSON 二进制。".
 -spec post_json(binary() | string(), headers(), binary()) -> result().
 post_json(Url, Headers, Body) ->
     post_json(Url, Headers, Body, #{}).
@@ -28,7 +27,7 @@ post_json(Url, Headers, Body) ->
 post_json(Url, Headers, Body, Opts) ->
     request(Url, Headers, "application/json", Body, Opts).
 
-%% @doc POST application/x-www-form-urlencoded（Stripe）。Body 为已编码表单串。
+-doc "POST application/x-www-form-urlencoded（Stripe）。Body 为已编码表单串。".
 -spec post_form(binary() | string(), headers(), binary()) -> result().
 post_form(Url, Headers, Body) ->
     post_form(Url, Headers, Body, #{}).
@@ -37,7 +36,7 @@ post_form(Url, Headers, Body) ->
 post_form(Url, Headers, Body, Opts) ->
     request(Url, Headers, "application/x-www-form-urlencoded", Body, Opts).
 
-%% @doc GET（主动查单 / 对账用）。Headers 通常含 Authorization。无请求体。
+-doc "GET（主动查单 / 对账用）。Headers 通常含 Authorization。无请求体。".
 -spec get(binary() | string(), headers()) -> result().
 get(Url, Headers) ->
     get(Url, Headers, #{}).
@@ -84,7 +83,7 @@ request(Url, Headers, ContentType, Body, Opts) ->
             {error, Reason}
     end.
 
-%% @doc 出站 TLS 安全选项：校验对端证书链 + 主机名（httpc 默认两者都不做）。
+-doc "出站 TLS 安全选项：校验对端证书链 + 主机名（httpc 默认两者都不做）。".
 -spec tls_opts() -> list().
 tls_opts() ->
     [
