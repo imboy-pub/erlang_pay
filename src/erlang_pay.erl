@@ -24,7 +24,9 @@
     build_pay_sign/3,
     gateway_module/1,
     query/3,
-    download_bill/3
+    download_bill/3,
+    capabilities/1,
+    supports/2
 ]).
 
 -type gateway() :: alipay | wechat | stripe.
@@ -67,16 +69,33 @@ verify_notify(Gateway, Cfg, Ctx) ->
     end.
 
 %% @doc 客户端二次签名（仅部分网关支持，如微信 JSAPI paySign）。
+%% 据网关 capabilities/0 显式声明判断，替代 function_exported 反射探测。
 -spec build_pay_sign(gateway(), map(), map()) -> {ok, map()} | err().
 build_pay_sign(Gateway, Cfg, Args) ->
     case gateway_module(Gateway) of
         {ok, Mod} ->
-            case erlang:function_exported(Mod, build_pay_sign, 2) of
+            case lists:member(build_pay_sign, Mod:capabilities()) of
                 true -> Mod:build_pay_sign(Cfg, Args);
                 false -> {error, {unsupported, <<"该网关不支持客户端二次签名"/utf8>>}}
             end;
         {error, _} ->
             {error, {unknown_gateway, <<"未知支付网关"/utf8>>}}
+    end.
+
+%% @doc 查询网关能力清单（atom 列表，见 epay_gateway capabilities/0 callback）。
+-spec capabilities(gateway()) -> {ok, [atom()]} | err().
+capabilities(Gateway) ->
+    case gateway_module(Gateway) of
+        {ok, Mod} -> {ok, Mod:capabilities()};
+        {error, _} -> {error, {unknown_gateway, <<"未知支付网关"/utf8>>}}
+    end.
+
+%% @doc 判断网关是否支持某能力。未知网关返回 false。
+-spec supports(gateway(), atom()) -> boolean().
+supports(Gateway, Capability) ->
+    case gateway_module(Gateway) of
+        {ok, Mod} -> lists:member(Capability, Mod:capabilities());
+        {error, _} -> false
     end.
 
 %% @doc gateway 原子 → 实现模块。

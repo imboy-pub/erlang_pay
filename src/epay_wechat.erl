@@ -22,11 +22,19 @@
 %%%===================================================================
 
 %% epay_gateway behaviour
--export([create_payment/2, refund/2, verify_notify/2, build_pay_sign/2, query/2, download_bill/2]).
+-export([
+    create_payment/2, refund/2, verify_notify/2, build_pay_sign/2, query/2, download_bill/2,
+    capabilities/0
+]).
 %% 低层 API（直接使用）
 -export([jsapi_prepay/2, native_prepay/2, build_jsapi_pay_sign/2, verify_notify/3]).
 
 -define(BASE_URL, <<"https://api.mch.weixin.qq.com">>).
+
+%% @doc 能力声明。微信支持 JSAPI 客户端二次签名（paySign）。
+-spec capabilities() -> [atom()].
+capabilities() ->
+    [create_payment, refund, query, download_bill, verify_notify, build_pay_sign].
 
 %%%===================================================================
 %%% epay_gateway behaviour

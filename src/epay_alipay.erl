@@ -16,12 +16,17 @@
 %%%===================================================================
 
 %% epay_gateway behaviour
--export([create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2]).
+-export([create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2, capabilities/0]).
 %% 低层 API（直接使用）
 -export([app_pay/4, verify_form/2]).
 
 -define(DEFAULT_GATEWAY, <<"https://openapi.alipay.com/gateway.do">>).
 -define(REFUND_RESP_KEY, <<"alipay_trade_refund_response">>).
+
+%% @doc 能力声明。App 支付 orderStr 由服务端签名后客户端直用，无独立二次签名。
+-spec capabilities() -> [atom()].
+capabilities() ->
+    [create_payment, refund, query, download_bill, verify_notify].
 
 %%%===================================================================
 %%% epay_gateway behaviour

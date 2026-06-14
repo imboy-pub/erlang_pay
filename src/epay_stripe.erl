@@ -16,12 +16,17 @@
 %%%===================================================================
 
 %% epay_gateway behaviour
--export([create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2]).
+-export([create_payment/2, refund/2, verify_notify/2, query/2, download_bill/2, capabilities/0]).
 %% 低层 API（直接使用）
 -export([create_payment_intent/2, verify_webhook/3]).
 
 -define(BASE_URL, <<"https://api.stripe.com">>).
 -define(WEBHOOK_TOLERANCE, 300).
+
+%% @doc 能力声明。Stripe 无客户端二次签名（PaymentIntent client_secret 直用）。
+-spec capabilities() -> [atom()].
+capabilities() ->
+    [create_payment, refund, query, download_bill, verify_notify].
 
 %%%===================================================================
 %%% epay_gateway behaviour
