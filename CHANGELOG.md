@@ -18,7 +18,7 @@ All notable changes to `erlang_pay` are documented here.
 - **Stripe** `epay_stripe`：PaymentIntent、退款、Webhook 验签（HMAC-SHA256 + 时间戳容差窗口可配 + 多 v1 签名）、查单、对账（Reporting）、撤单。
 - **多币种金额** `epay_money`：ISO 4217 exponent 表（2/0/3 位），主单位↔最小单位整数换算，杜绝浮点误差。
 - **可选 OTP 组件** `epay_cert_mgr`：gen_server + ETS，自动下载/缓存/定时轮换微信平台证书，多租户 `{mch_id, serial}`；
-  库纯函数核心不依赖它也能验签。
+  提供 `child_spec/1` 可一行挂入消费者监督树（崩溃由 supervisor 重启）；库纯函数核心不依赖它也能验签。
 - 共享层：`epay_crypto`（RSA SHA256withRSA、HMAC-SHA256、AES-256-GCM、常量时间比较、PEM 解析）、
   `epay_http`（强制 TLS 证书 + 主机名校验的出站 POST/GET）、`epay_util`（URL/表单/JSON/金额换算）。
 

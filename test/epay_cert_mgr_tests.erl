@@ -53,8 +53,35 @@ cert_mgr_test_() ->
         {"强制刷新重新下载", fun force_refresh/0},
         {"多租户 {mch_id, serial} 隔离", fun multi_tenant/0},
         {"未知序列号 not_found", fun not_found/0},
-        {"下载失败回报错误但仍登记商户", fun download_error/0}
+        {"下载失败回报错误但仍登记商户", fun download_error/0},
+        {"child_spec 可挂入监督树", fun supervisable/0}
     ]}.
+
+%%%-------------------------------------------------------------------
+%%% child_spec：形状正确 + start MFA 能真实启动可用进程（即可挂入监督树）
+%%%-------------------------------------------------------------------
+supervisable() ->
+    Spec = epay_cert_mgr:child_spec(#{refresh_interval => ?BIG_INTERVAL}),
+    ?assertMatch(
+        #{
+            id := epay_cert_mgr,
+            start := {epay_cert_mgr, start_link, [_]},
+            restart := permanent,
+            shutdown := 5000,
+            type := worker
+        },
+        Spec
+    ),
+    %% supervisor 用 child_spec 的 start MFA 启动 child；这里直接 apply 验证其可用
+    #{start := {M, F, A}} = Spec,
+    {ok, Pid} = apply(M, F, A),
+    try
+        ?assert(is_pid(Pid)),
+        ok = epay_cert_mgr:add_merchant(Pid, mch(<<"M1">>)),
+        ?assertMatch({ok, _}, epay_cert_mgr:get_cert(Pid, <<"M1">>, <<"SERIAL_A">>))
+    after
+        epay_cert_mgr:stop(Pid)
+    end.
 
 %%%-------------------------------------------------------------------
 cache_hit() ->

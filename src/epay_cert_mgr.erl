@@ -25,6 +25,7 @@
 
 %% API
 -export([
+    child_spec/1,
     start_link/0, start_link/1,
     add_merchant/2,
     get_cert/3,
@@ -52,6 +53,20 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+%% @doc 监督树 child spec：消费者一行将本组件挂入自己的 supervisor，
+%% 崩溃由 supervisor 自动重启（对标 wechatpay-go CertificateDownloaderMgr 自愈）。
+%% Opts 透传给 start_link/1；可加 id 覆盖默认 child id。
+-spec child_spec(map()) -> supervisor:child_spec().
+child_spec(Opts) ->
+    #{
+        id => maps:get(id, Opts, ?MODULE),
+        start => {?MODULE, start_link, [Opts]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [?MODULE]
+    }.
 
 -spec start_link() -> {ok, pid()} | {error, term()}.
 start_link() ->

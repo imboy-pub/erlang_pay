@@ -133,6 +133,9 @@ true  = erlang_pay:supports(wechat, close),
 {ok, Mgr} = epay_cert_mgr:start_link(#{refresh_interval => 43200000}),
 ok = epay_cert_mgr:add_merchant(Mgr, WxCfg),
 {ok, CertPem} = epay_cert_mgr:get_cert(Mgr, MchId, Serial).
+
+%% 或一行挂入自己的监督树，崩溃由 supervisor 自动重启：
+%%   ChildSpecs = [epay_cert_mgr:child_spec(#{refresh_interval => 43200000})].
 ```
 
 ## 错误返回约定
