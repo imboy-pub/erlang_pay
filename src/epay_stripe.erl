@@ -182,16 +182,19 @@ parse_refund(Body) ->
 %%%===================================================================
 
 %% @doc 验证 Stripe-Signature 头。SigHeader 形如 "t=NNN,v1=hex[,v1=hex2]"。
+%% 时间戳容差窗口可经 Cfg 的 webhook_tolerance（秒）覆盖，默认 300s。超窗即拒，
+%% 防重放（Stripe 官方建议 default_tolerance=300）。
 -spec verify_webhook(map(), binary(), binary()) -> ok | epay_gateway:err().
 verify_webhook(Cfg, SigHeader, RawBody) ->
     Secret = maps:get(webhook_secret, Cfg, <<>>),
+    Tolerance = maps:get(webhook_tolerance, Cfg, ?WEBHOOK_TOLERANCE),
     case Secret of
         <<>> ->
             {error, {no_credential, <<"缺少 Stripe webhook_secret"/utf8>>}};
         _ ->
             case parse_sig_header(SigHeader) of
                 {ok, TsBin, V1List} ->
-                    case check_timestamp(TsBin) of
+                    case check_timestamp(TsBin, Tolerance) of
                         ok -> verify_v1(Secret, TsBin, RawBody, V1List);
                         {error, _} = E -> E
                     end;
@@ -233,12 +236,12 @@ parse_sig_header(Header) when is_binary(Header) ->
 parse_sig_header(_) ->
     error.
 
--spec check_timestamp(binary()) -> ok | epay_gateway:err().
-check_timestamp(TsBin) ->
+-spec check_timestamp(binary(), non_neg_integer()) -> ok | epay_gateway:err().
+check_timestamp(TsBin, Tolerance) ->
     try
         Ts = binary_to_integer(TsBin),
         Now = erlang:system_time(second),
-        case abs(Now - Ts) > ?WEBHOOK_TOLERANCE of
+        case abs(Now - Ts) > Tolerance of
             true -> {error, {timestamp_expired, <<"Stripe webhook 时间戳超出容差窗口"/utf8>>}};
             false -> ok
         end

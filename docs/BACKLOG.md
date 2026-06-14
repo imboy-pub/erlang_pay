@@ -57,7 +57,7 @@
 - 目标：`epay_gateway` 加 `close/2`（关单）、`cancel/2`（撤单）optional callback；按各网关支持度实现。
 - 验收：gate 绿；meck EUnit。
 
-### T08 [TODO] Stripe webhook 时间戳 tolerance 防重放
+### T08 [DONE] Stripe webhook 时间戳 tolerance 防重放
 - 目标：核实并补全 Stripe webhook 验签的时间戳容差窗口（默认 300s），超窗拒绝，防重放。
 - 验收：gate 绿；EUnit 覆盖过期时间戳→拒绝、窗口内→通过。
 - 参照：报告 §4 P2。
@@ -78,4 +78,5 @@
 - 2026-06-14 T05 DONE — 统一错误返回 {error, {Code::atom(), Msg::binary()}}：behaviour 定义 err/0 类型并导出；门面 erlang_pay 与三网关全部错误返回点对齐（gateway_error/http_error/invalid_response/sign_failed/no_credential/bad_signature/timestamp_expired/decrypt_failed/unsupported/unknown_gateway…）；底层原语 epay_crypto/epay_util/epay_money 保留各自被测错误词汇（不在本范围）；epay_query_tests 加 2 个能力/未知网关 build_pay_sign 错误用例 + 收紧 http_error/gateway_error 断言。gate 绿（56 EUnit）。
 - 2026-06-14 T06 DONE — capabilities/0 能力声明：behaviour 加 capabilities/0 callback；三网关各显式列能力（微信含 build_pay_sign，支付宝/Stripe 不含）；门面 build_pay_sign 用 lists:member(Mod:capabilities()) 替代 function_exported 反射；门面新增 capabilities/1 + supports/2。epay_capabilities_tests 7 个纯函数 EUnit。gate 绿（63 EUnit）。
 - 2026-06-14 T07 DONE — close/2 关单 + cancel/2 撤单：behaviour 加 close/cancel optional callback；按支持度实现（微信 close、支付宝 close+cancel 共用 trade_action、Stripe cancel）；各网关 capabilities 同步登记；门面 close/3 + cancel/3 经 cap_dispatch 能力门控（不支持→unsupported）。epay_close_cancel_tests 9 个 meck EUnit。gate 绿（72 EUnit）。
+- 2026-06-14 T08 DONE — Stripe webhook 时间戳防重放：容差窗口由硬编码改为可经 Cfg webhook_tolerance 覆盖（默认 300s）；check_timestamp/2 接收容差；超窗（过期/未来）即拒。epay_webhook_tests 8 个真实 HMAC EUnit（窗口内通过/过期拒/未来拒/自定义容差/篡改签名/篡改 body/缺凭据/头非法），相对真实时钟取偏移确定性验证。gate 绿（80 EUnit）。
 - ⚠️ 2026-06-14 恢复说明 — T02/T03/T04 此前多轮"提交"实为 sandbox 幻影未落真实 git（真实 git 此前仅 T01 89af42b）；本次经 Edit/Write 在真实 FS 重建全部并一次性提交。教训：源码改动必须用 Edit/Write 工具，禁用 Bash 脚本改源码（落 sandbox 不持久）；gate/commit 须 sandbox 禁用。
