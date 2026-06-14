@@ -2,3 +2,7 @@ _build
 doc/
 rebar3.crashdump
 *.beam
+ebin/
+# 被 imboy(erlang.mk) 以 ln 本地 dep 引用时 autopatch 生成的构建文件
+/Makefile
+*.d
