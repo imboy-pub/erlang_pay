@@ -177,8 +177,10 @@ refund(Cfg, Req) ->
                 true -> {ok, Resp};
                 false -> {error, {gateway_error, <<"微信退款状态:"/utf8, Status/binary>>}}
             end;
-        {ok, Resp} ->
-            {ok, Resp};
+        {ok, _Resp} ->
+            %% H1：响应缺 status 字段时不得 fallthrough {ok,_}，
+            %% 退款结果语义不明须强制调用方按错误处理（资金安全）。
+            {error, {invalid_refund_response, <<"微信退款响应缺少 status 字段"/utf8>>}};
         {error, _} = Err ->
             Err
     end.
@@ -269,7 +271,16 @@ add_notify_state(Other) ->
 
 -spec decrypt_resource(map(), binary()) -> {ok, map()} | epay_gateway:err().
 decrypt_resource(Cfg, RawBody) ->
-    ApiV3Key = maps:get(api_v3_key, Cfg, <<>>),
+    %% H2：api_v3_key 缺失/为空必须前置 fail-closed，绝不带空密钥进解密。
+    case maps:get(api_v3_key, Cfg, <<>>) of
+        <<>> ->
+            {error, {no_credential, <<"缺少微信 api_v3_key"/utf8>>}};
+        ApiV3Key ->
+            decrypt_resource(Cfg, RawBody, ApiV3Key)
+    end.
+
+-spec decrypt_resource(map(), binary(), binary()) -> {ok, map()} | epay_gateway:err().
+decrypt_resource(_Cfg, RawBody, ApiV3Key) ->
     case epay_util:json_decode(RawBody) of
         {ok, #{<<"resource">> := Res}} when is_map(Res) ->
             Cipher = maps:get(<<"ciphertext">>, Res, <<>>),
@@ -281,9 +292,9 @@ decrypt_resource(Cfg, RawBody) ->
                         {ok, M} when is_map(M) -> {ok, M};
                         _ -> {error, {bad_plaintext, <<"微信回调明文非 JSON 对象"/utf8>>}}
                     end;
-                {error, Reason} ->
-                    {error, {decrypt_failed, <<"微信回调 resource 解密失败:"/utf8,
-                        (atom_to_binary(Reason, utf8))/binary>>}}
+                {error, _Reason} ->
+                    %% H2：错误文案固定，不拼接内部 atom 名（防内部错误名穿透对外）。
+                    {error, {decrypt_failed, <<"微信回调 resource 解密失败"/utf8>>}}
             end;
         _ ->
             {error, {no_resource, <<"微信回调缺少 resource"/utf8>>}}
