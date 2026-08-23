@@ -50,7 +50,7 @@ cancel(Cfg, Req) ->
 trade_action(Cfg, Req, Method, RespKey, OkFun) ->
     #{app_id := AppId, private_key := PriKey} = Cfg,
     Biz = #{<<"out_trade_no">> => maps:get(out_trade_no, Req)},
-    Params = build_params(AppId, Method, Biz),
+    Params = build_params(AppId, Method, Biz, Cfg),
     case sign_params(Params, PriKey) of
         {ok, Signed} ->
             Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
@@ -123,7 +123,8 @@ app_pay(Cfg, OrderNo, AmountFen, Opts) ->
         <<"version">> => <<"1.0">>,
         <<"biz_content">> => epay_util:json_encode(Biz)
     },
-    Params = maybe_put(<<"notify_url">>, maps:get(notify_url, Cfg, <<>>), Params0),
+    Params1 = maybe_put(<<"notify_url">>, maps:get(notify_url, Cfg, <<>>), Params0),
+    Params = maybe_put_cert_sn(Params1, Cfg),
     case sign_params(Params, PriKey) of
         {ok, Signed} ->
             {ok, #{order_str => build_query(Signed)}};
@@ -148,7 +149,7 @@ refund(Cfg, Req) ->
     },
     Biz1 = maybe_put(<<"out_request_no">>, maps:get(out_request_no, Req, <<>>), Biz0),
     Biz = maybe_put(<<"refund_reason">>, maps:get(refund_reason, Req, <<>>), Biz1),
-    Params = #{
+    Params0 = #{
         <<"app_id">> => AppId,
         <<"method">> => <<"alipay.trade.refund">>,
         <<"format">> => <<"JSON">>,
@@ -158,6 +159,7 @@ refund(Cfg, Req) ->
         <<"version">> => <<"1.0">>,
         <<"biz_content">> => epay_util:json_encode(Biz)
     },
+    Params = maybe_put_cert_sn(Params0, Cfg),
     case sign_params(Params, PriKey) of
         {ok, Signed} ->
             Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
@@ -278,6 +280,13 @@ build_query(Params) ->
 maybe_put(_K, <<>>, M) -> M;
 maybe_put(K, V, M) -> M#{K => V}.
 
+%% 证书模式下追加 app_cert_sn / alipay_root_cert_sn 到公共参数。
+%% 证书模式判定：app_cert_sn 非空即视为证书模式（与 alipay_openapi 一致）。
+-spec maybe_put_cert_sn(map(), map()) -> map().
+maybe_put_cert_sn(Params, Cfg) ->
+    Params1 = maybe_put(<<"app_cert_sn">>, maps:get(app_cert_sn, Cfg, <<>>), Params),
+    maybe_put(<<"alipay_root_cert_sn">>, maps:get(alipay_root_cert_sn, Cfg, <<>>), Params1).
+
 -spec now_beijing() -> binary().
 now_beijing() ->
     Secs = erlang:system_time(second) + 8 * 3600,
@@ -316,7 +325,7 @@ query(Cfg, Q) ->
     #{app_id := AppId, private_key := PriKey} = Cfg,
     OutTradeNo = maps:get(out_trade_no, Q),
     Biz = #{<<"out_trade_no">> => OutTradeNo},
-    Params = build_params(AppId, <<"alipay.trade.query">>, Biz),
+    Params = build_params(AppId, <<"alipay.trade.query">>, Biz, Cfg),
     case sign_params(Params, PriKey) of
         {ok, Signed} ->
             Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
@@ -332,7 +341,7 @@ download_bill(Cfg, Req) ->
     BillType = maps:get(bill_type, Req, <<"trade">>),
     BillDate = maps:get(bill_date, Req),
     Biz = #{<<"bill_type">> => BillType, <<"bill_date">> => BillDate},
-    Params = build_params(AppId, <<"alipay.data.dataservice.bill.downloadurl.query">>, Biz),
+    Params = build_params(AppId, <<"alipay.data.dataservice.bill.downloadurl.query">>, Biz, Cfg),
     case sign_params(Params, PriKey) of
         {ok, Signed} ->
             Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
@@ -341,10 +350,10 @@ download_bill(Cfg, Req) ->
             normalize_err(Err)
     end.
 
-%% 构造支付宝开放平台公共请求参数。
--spec build_params(binary(), binary(), map()) -> map().
-build_params(AppId, Method, Biz) ->
-    #{
+%% 构造支付宝开放平台公共请求参数。证书模式下追加 app_cert_sn/alipay_root_cert_sn。
+-spec build_params(binary(), binary(), map(), map()) -> map().
+build_params(AppId, Method, Biz, Cfg) ->
+    Base = #{
         <<"app_id">> => AppId,
         <<"method">> => Method,
         <<"format">> => <<"JSON">>,
@@ -353,7 +362,8 @@ build_params(AppId, Method, Biz) ->
         <<"timestamp">> => now_beijing(),
         <<"version">> => <<"1.0">>,
         <<"biz_content">> => epay_util:json_encode(Biz)
-    }.
+    },
+    maybe_put_cert_sn(Base, Cfg).
 
 %% 发请求 + 取响应业务节点 + code 校验 + 委托 OkFun 构造成功返回。
 -spec do_open_request(binary(), binary(), binary(), fun((map()) -> map())) ->
