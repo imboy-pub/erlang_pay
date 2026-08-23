@@ -13,7 +13,7 @@
 
 ## 命令
 ```bash
-make            # rebar3 compile
+rebar3 compile  # 编译（Makefile 不入库——.gitignore /Makefile 有意为之）
 rebar3 eunit    # 单元测试（test/）
 rebar3 dialyzer
 ```
