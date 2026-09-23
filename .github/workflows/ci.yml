@@ -30,10 +30,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Erlang/OTP + rebar3
-        uses: erlef/setup-beam@v2
+        uses: erlef/setup-beam@v1
         with:
-          erlang-version: ${{ matrix.otp }}
-          # rebar3 由 setup-beam 按所选 OTP 自动配套安装
+          otp-version: ${{ matrix.otp }}
+          # setup-beam 不给 rebar3-version 就不装 rebar3（后续步骤全部直接调用 rebar3）
+          # rebar3 必须 >= 3.25：3.24 的官方 escript 在 OTP 29 上无法加载
+          # （beam_load.c: please re-compile this module with an Erlang/OTP 29 compiler）
+          rebar3-version: '3.27'
 
       - name: Compile
         run: rebar3 compile
