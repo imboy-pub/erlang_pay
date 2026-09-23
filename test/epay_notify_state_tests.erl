@@ -67,11 +67,13 @@ stripe_state_is_canonical_test() ->
 %%%===================================================================
 %%% Alipay —— meck rsa_verify→true，trade_status → trade_state
 %%%===================================================================
-al_cfg() -> #{public_key => <<"pk">>}.
+%% EP-12：通知须绑定 app_id（配置与表单一致即可，验签由 meck 接管）
+al_cfg() -> #{app_id => <<"A1">>, public_key => <<"pk">>}.
 
 %% sign 为合法 base64（<<"YWJj">> = "abc"），令 safe_b64_decode 通过后由 meck 接管验签
 al_form(TradeStatus) ->
     #{<<"sign">> => <<"YWJj">>,
+      <<"app_id">> => <<"A1">>,
       <<"out_trade_no">> => <<"X1">>,
       <<"trade_status">> => TradeStatus}.
 

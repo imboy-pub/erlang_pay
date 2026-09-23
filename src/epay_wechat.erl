@@ -12,11 +12,22 @@
 %%%   - build_jsapi_pay_sign/2           : 客户端调起二次签名 paySign
 %%%   - refund/2                         : v3 退款
 %%%   - verify_notify/3                  : 回调验签（平台公钥）+ AES-GCM 解密
+%%%   - EP-11 应答验签                    : 2xx 应答先验签后解析
+%%%
+%%% EP-11 应答与回调验签合同（官方《签名验证》+ 官方 SDK wechatpay-java）：
+%%%   - 验签串三行构造：Timestamp\nNonce\nBody\n（行尾均含 \n；204 空 body
+%%%     时 Message = Ts\nNonce\n\n）；用原始报文主体验签，先验签后 JSON 解析。
+%%%   - 四个头：Wechatpay-Timestamp / Wechatpay-Nonce /
+%%%     Wechatpay-Signature（base64 RSA-SHA256）/ Wechatpay-Serial。
+%%%   - 应答与回调时间戳均做双向 ±5min 窗口校验（防重放）。
+%%%   - 验签失败（含 SIGNTEST 前缀探测流量）一律 fail-closed，绝不解析 body。
 %%%
 %%% Cfg :: #{mch_id := binary(), app_id := binary(), api_v3_key := binary(),
 %%%          mch_serial_no := binary(), private_key := binary(),
 %%%          platform_public_key => binary(), notify_url => binary(),
-%%%          base_url => binary()}
+%%%          base_url => binary(),
+%%%          platform_serial => binary()}  %% 可选：配置后应答/回调头
+%%%                                       %% wechatpay-serial 必须精确匹配
 %%% 金额统一以「分」(integer) 传入（微信原生单位即分）。
 %%% @end
 %%%===================================================================
@@ -211,40 +222,75 @@ refund_body(_Cfg, Req) ->
 
 %% @doc 验证回调签名（平台公钥）并解密 resource，返回明文 JSON map。
 %% Headers 为小写键 map（cowboy 已小写化）。
+%% EP-11：Cfg 配置可选键 platform_serial => binary() 时（公钥模式
+%% PUB_KEY_ID_ 或证书序列号绑定），头 wechatpay-serial 必须精确匹配，
+%% 否则 fail-closed；未配置时不约束（兼容现有单公钥配置）。
 -spec verify_notify(map(), map(), binary()) -> {ok, map()} | epay_gateway:err().
 verify_notify(Cfg, Headers, RawBody) ->
     Ts = header(Headers, <<"wechatpay-timestamp">>),
     Nonce = header(Headers, <<"wechatpay-nonce">>),
     Sig = header(Headers, <<"wechatpay-signature">>),
+    Serial = header(Headers, <<"wechatpay-serial">>),
     PubKey = maps:get(platform_public_key, Cfg, <<>>),
-    case validate_notify_headers(Ts, Nonce, Sig, PubKey) of
+    case validate_sig_headers(Ts, Nonce, Sig, PubKey) of
         ok ->
-            case check_timestamp(Ts) of
+            case check_serial(Cfg, Serial) of
                 ok ->
-                    Message = <<Ts/binary, "\n", Nonce/binary, "\n", RawBody/binary, "\n">>,
-                    case safe_b64_decode(Sig) of
-                        {ok, SigBin} ->
-                            case epay_crypto:rsa_verify_sha256(Message, SigBin, PubKey) of
-                                true -> add_notify_state(decrypt_resource(Cfg, RawBody));
-                                false -> {error, {bad_signature, <<"微信回调验签失败"/utf8>>}}
-                            end;
-                        error ->
-                            {error, {bad_signature, <<"微信回调签名 base64 解析失败"/utf8>>}}
+                    case verify_signature_core(<<"微信回调"/utf8>>, Ts, Nonce, Sig, PubKey, RawBody) of
+                        ok -> add_notify_state(decrypt_resource(Cfg, RawBody));
+                        {error, _} = Err -> Err
                     end;
-                {error, _} = E ->
-                    E
+                {error, _} = Err ->
+                    Err
             end;
         {error, _} = Err ->
             Err
     end.
 
--spec validate_notify_headers(binary(), binary(), binary(), binary()) ->
+%% EP-11：serial 约束（应答/回调共用）。Cfg 配置 platform_serial 时头
+%% wechatpay-serial 必须与之相等，否则 fail-closed（用于公钥模式
+%% PUB_KEY_ID_ 或证书序列号绑定）；未配置时不约束。
+-spec check_serial(map(), binary()) -> ok | epay_gateway:err().
+check_serial(Cfg, Serial) ->
+    case maps:get(platform_serial, Cfg, <<>>) of
+        <<>> -> ok;
+        Expect when Expect =:= Serial -> ok;
+        _ -> {error, {serial_mismatch, Serial}}
+    end.
+
+%% 验签核心（应答/回调共用）：时间窗 + base64 + RSA-SHA256。
+%% Message 严格三行构造：Ts\nNonce\nBody\n（空 body 时末行仅 \n）。
+%% Scene 为场景文案前缀（<<"微信应答">>/<<"微信回调">>）。
+-spec verify_signature_core(binary(), binary(), binary(), binary(), binary(), binary()) ->
     ok | epay_gateway:err().
-validate_notify_headers(<<>>, _, _, _) -> {error, {missing_timestamp, <<"缺少回调时间戳头"/utf8>>}};
-validate_notify_headers(_, <<>>, _, _) -> {error, {missing_nonce, <<"缺少回调 nonce 头"/utf8>>}};
-validate_notify_headers(_, _, <<>>, _) -> {error, {missing_signature, <<"缺少回调签名头"/utf8>>}};
-validate_notify_headers(_, _, _, <<>>) -> {error, {no_credential, <<"缺少平台公钥"/utf8>>}};
-validate_notify_headers(_, _, _, _) -> ok.
+verify_signature_core(Scene, Ts, Nonce, Sig, PubKey, Body) ->
+    case check_timestamp(Ts) of
+        ok ->
+            Message = <<Ts/binary, "\n", Nonce/binary, "\n", Body/binary, "\n">>,
+            case safe_b64_decode(Sig) of
+                {ok, SigBin} ->
+                    case epay_crypto:rsa_verify_sha256(Message, SigBin, PubKey) of
+                        true -> ok;
+                        false -> {error, {bad_signature, <<Scene/binary, "验签失败"/utf8>>}}
+                    end;
+                error ->
+                    {error, {bad_signature, <<Scene/binary, "签名 base64 解析失败"/utf8>>}}
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+-spec validate_sig_headers(binary(), binary(), binary(), binary()) ->
+    ok | epay_gateway:err().
+validate_sig_headers(<<>>, _, _, _) ->
+    {error, {missing_timestamp, <<"缺少微信应答/回调时间戳头"/utf8>>}};
+validate_sig_headers(_, <<>>, _, _) ->
+    {error, {missing_nonce, <<"缺少微信应答/回调 nonce 头"/utf8>>}};
+validate_sig_headers(_, _, <<>>, _) ->
+    {error, {missing_signature, <<"缺少微信应答/回调签名头"/utf8>>}};
+validate_sig_headers(_, _, _, <<>>) ->
+    {error, {no_credential, <<"缺少平台公钥"/utf8>>}};
+validate_sig_headers(_, _, _, _) -> ok.
 
 -spec check_timestamp(binary()) -> ok | epay_gateway:err().
 check_timestamp(TsBin) ->
@@ -252,11 +298,13 @@ check_timestamp(TsBin) ->
         Ts = binary_to_integer(TsBin),
         Now = erlang:system_time(second),
         case abs(Now - Ts) > ?NOTIFY_TOLERANCE of
-            true -> {error, {timestamp_expired, <<"微信回调时间戳超出容差窗口"/utf8>>}};
-            false -> ok
+            true ->
+                {error, {timestamp_expired, <<"微信应答/回调时间戳超出容差窗口"/utf8>>}};
+            false ->
+                ok
         end
     catch
-        _:_ -> {error, {invalid_timestamp, <<"微信回调时间戳非法"/utf8>>}}
+        _:_ -> {error, {invalid_timestamp, <<"微信应答/回调时间戳非法"/utf8>>}}
     end.
 
 %% 加性注入归一 trade_state（epay_state:state()）到解密后的回调明文。
@@ -304,7 +352,8 @@ decrypt_resource(_Cfg, RawBody, ApiV3Key) ->
 %%% Internal —— APIv3 签名 + 出站
 %%%===================================================================
 
-%% 签名 + POST，返回解析后的 JSON map（2xx）或 {error, {Code, Msg}}
+%% 签名 + POST，返回解析后的 JSON map（2xx）或 {error, {Code, Msg}}。
+%% EP-11：2xx 应答先验签（Wechatpay-* 头 + 平台公钥）后解析。
 -spec post_signed(map(), binary(), binary()) -> {ok, map()} | epay_gateway:err().
 post_signed(Cfg, Path, Body) ->
     case sign_request(Cfg, <<"POST">>, Path, Body) of
@@ -316,8 +365,11 @@ post_signed(Cfg, Path, Body) ->
                 {<<"User-Agent">>, <<"erlang_pay/0.1.0">>}
             ],
             case epay_http:post_json(Url, Headers, Body) of
-                {ok, Status, _H, RespBody} when Status >= 200, Status < 300 ->
-                    decode_ok(RespBody);
+                {ok, Status, RespHeaders, RespBody} when Status >= 200, Status < 300 ->
+                    case verify_response(Cfg, RespHeaders, RespBody) of
+                        ok -> decode_ok(RespBody);
+                        {error, _} = Err -> Err
+                    end;
                 {ok, _Status, _H, RespBody} ->
                     {error, wechat_err_msg(RespBody)};
                 {error, Reason} ->
@@ -326,6 +378,45 @@ post_signed(Cfg, Path, Body) ->
         {error, _} ->
             {error, {sign_failed, <<"微信请求签名失败"/utf8>>}}
     end.
+
+%% EP-11：2xx 应答验签（先验签后解析，绝不在验签失败时继续解析 body）。
+%% RespHeaders 为 httpc 原始 list（键值类型/大小写不定），先归一化再提取。
+%% D-02：platform_public_key 缺失/为空即 fail-closed，无「继续解析」开关。
+-spec verify_response(map(), list(), binary()) -> ok | epay_gateway:err().
+verify_response(Cfg, RespHeaders, RespBody) ->
+    Norm = norm_resp_headers(RespHeaders),
+    Ts = maps:get(<<"wechatpay-timestamp">>, Norm, <<>>),
+    Nonce = maps:get(<<"wechatpay-nonce">>, Norm, <<>>),
+    Sig = maps:get(<<"wechatpay-signature">>, Norm, <<>>),
+    Serial = maps:get(<<"wechatpay-serial">>, Norm, <<>>),
+    PubKey = maps:get(platform_public_key, Cfg, <<>>),
+    case validate_sig_headers(Ts, Nonce, Sig, PubKey) of
+        ok ->
+            case check_serial(Cfg, Serial) of
+                ok ->
+                    verify_signature_core(<<"微信应答"/utf8>>, Ts, Nonce, Sig, PubKey, RespBody);
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% httpc 原始响应头归一化：[{StrK, StrV} ...]（键值类型/大小写不定）→
+%% 小写 binary 键 map，供 Wechatpay-* 头提取。
+-spec norm_resp_headers(list()) -> #{binary() := binary()}.
+norm_resp_headers(Hdrs) when is_list(Hdrs) ->
+    maps:from_list([{lower_bin(K), to_bin(V)} || {K, V} <- Hdrs]).
+
+-spec lower_bin(binary() | string() | atom()) -> binary().
+lower_bin(K) when is_binary(K) -> string:lowercase(K);
+lower_bin(K) when is_list(K) -> string:lowercase(unicode:characters_to_binary(K));
+lower_bin(K) when is_atom(K) -> string:lowercase(atom_to_binary(K)).
+
+-spec to_bin(binary() | string() | atom()) -> binary().
+to_bin(V) when is_binary(V) -> V;
+to_bin(V) when is_list(V) -> unicode:characters_to_binary(V);
+to_bin(V) when is_atom(V) -> atom_to_binary(V).
 
 -spec decode_ok(binary()) -> {ok, map()} | epay_gateway:err().
 decode_ok(<<>>) ->
@@ -425,6 +516,7 @@ download_bill(Cfg, Req) ->
     end.
 
 %% APIv3 签名 + GET（查单/对账共用），复用 sign_request（Method=GET, Body=<<>>）。
+%% EP-11：2xx 应答先验签（Wechatpay-* 头 + 平台公钥）后解析。
 -spec get_signed(map(), binary()) -> {ok, map()} | epay_gateway:err().
 get_signed(Cfg, Path) ->
     case sign_request(Cfg, <<"GET">>, Path, <<>>) of
@@ -436,8 +528,11 @@ get_signed(Cfg, Path) ->
                 {<<"User-Agent">>, <<"erlang_pay/0.1.0">>}
             ],
             case epay_http:get(Url, Headers) of
-                {ok, Status, _H, RespBody} when Status >= 200, Status < 300 ->
-                    decode_ok(RespBody);
+                {ok, Status, RespHeaders, RespBody} when Status >= 200, Status < 300 ->
+                    case verify_response(Cfg, RespHeaders, RespBody) of
+                        ok -> decode_ok(RespBody);
+                        {error, _} = Err -> Err
+                    end;
                 {ok, _Status, _H, RespBody} ->
                     {error, wechat_err_msg(RespBody)};
                 {error, Reason} ->

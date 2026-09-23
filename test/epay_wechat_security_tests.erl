@@ -17,7 +17,8 @@
     mch_id => <<"M1">>,
     mch_serial_no => <<"S1">>,
     private_key => <<"K1">>,
-    app_id => <<"A1">>
+    app_id => <<"A1">>,
+    platform_public_key => <<"PK1">>  %% EP-11：应答验签所需（meck 验签通过）
 }).
 
 %%%-------------------------------------------------------------------
@@ -27,13 +28,25 @@ with_post_mock(RespBody, Fun) ->
     meck:new(epay_http, [passthrough]),
     meck:new(epay_crypto, [passthrough]),
     meck:expect(epay_crypto, rsa_sign_sha256, fun(_, _) -> {ok, <<"sig">>} end),
-    meck:expect(epay_http, post_json, fun(_Url, _Hdr, _Body) -> {ok, 200, [], RespBody} end),
+    %% EP-11：2xx 应答先验签后解析——mock 验签通过（H1 断言本身不变）
+    meck:expect(epay_crypto, rsa_verify_sha256, fun(_, _, _) -> true end),
+    meck:expect(epay_http, post_json,
+        fun(_Url, _Hdr, _Body) -> {ok, 200, wx_resp_hdrs(), RespBody} end),
     try
         Fun()
     after
         meck:unload(epay_crypto),
         meck:unload(epay_http)
     end.
+
+%% EP-11：mock 应答补合法验签头（时间戳取当前时间，落在 ±300s 窗口内）
+wx_resp_hdrs() ->
+    [
+        {"Wechatpay-Timestamp", integer_to_list(erlang:system_time(second))},
+        {"Wechatpay-Nonce", "mock-nonce"},
+        {"Wechatpay-Signature", "c2ln"},
+        {"Wechatpay-Serial", "mock-serial"}
+    ].
 
 refund_req() ->
     #{

@@ -143,10 +143,51 @@ parse_payment_intent(Body) ->
 %%% 退款
 %%%===================================================================
 
-%% @doc 退款。Req :: #{payment_intent := binary(), amount_fen => integer()}
+%% @doc 退款。
+%% Req :: #{payment_intent := binary(),
+%%          amount_fen => integer(),
+%%          idempotency_key => binary(),
+%%          out_refund_no => binary()}
+%%
+%% 幂等键规则（与 create_payment_intent 的 pi_ 前缀键惯例对齐）：
+%%   - 显式 idempotency_key 优先，直接用作 Idempotency-Key 头；
+%%   - 否则由 out_refund_no 派生稳定键 rf_ 前缀 + 退款号；
+%%   - 两者皆缺 → {error, {bad_request, _}}，绝不发送 HTTP POST；
+%%   - 禁止用 payment_intent 派生（同一 PI 允许多次部分退款，以其为键
+%%     会把第二次部分退款错误地去重成首次结果）。
+%%
+%% 超时/连接错误时退款结果未知：调用方必须先 GET /v1/refunds（或查订单
+%% 状态）确认后再决定是否重试；携带相同幂等键重试是安全的——Stripe 对
+%% 同键请求在 24 小时内返回首次执行结果，不会重复扣退。
 -spec refund(map(), map()) -> {ok, map()} | epay_gateway:err().
 refund(Cfg, Req) ->
     Pi = maps:get(payment_intent, Req),
+    case refund_idempotency_key(Req) of
+        {ok, IdemKey} ->
+            post_refund(Cfg, Pi, IdemKey, Req);
+        {error, _} = Err ->
+            Err
+    end.
+
+%% 提取退款幂等键：显式 idempotency_key 优先，其次由 out_refund_no 派生
+%% rf_ 前缀 + 退款号；两者皆缺（或为空）→ {bad_request, _} 前置拒绝。
+-spec refund_idempotency_key(map()) -> {ok, binary()} | epay_gateway:err().
+refund_idempotency_key(Req) ->
+    Explicit = maps:get(idempotency_key, Req, undefined),
+    OutRefundNo = maps:get(out_refund_no, Req, undefined),
+    case {Explicit, OutRefundNo} of
+        {K, _} when is_binary(K), K =/= <<>> -> {ok, K};
+        {_, N} when is_binary(N), N =/= <<>> -> {ok, <<"rf_", N/binary>>};
+        _ ->
+            {error, {bad_request,
+                     <<"退款请求缺少 idempotency_key 或 out_refund_no，"
+                       "拒绝无幂等键发起退款"/utf8>>}}
+    end.
+
+%% 携带幂等键发起 POST /v1/refunds（金额可选，缺省为全额退款）
+-spec post_refund(map(), binary(), binary(), map()) ->
+    {ok, map()} | epay_gateway:err().
+post_refund(Cfg, Pi, IdemKey, Req) ->
     Base = [{<<"payment_intent">>, Pi}],
     Pairs =
         case maps:get(amount_fen, Req, undefined) of
@@ -154,7 +195,11 @@ refund(Cfg, Req) ->
             Amt -> Base ++ [{<<"amount">>, Amt}]
         end,
     Form = epay_util:form_encode(Pairs),
-    Headers = [{<<"Authorization">>, bearer(Cfg)}],
+    Headers = [
+        {<<"Authorization">>, bearer(Cfg)},
+        %% 幂等键：同一退款号重复请求不会重复扣退（同键 24h 返回首次结果）
+        {<<"Idempotency-Key">>, IdemKey}
+    ],
     Url = <<(base_url(Cfg))/binary, "/v1/refunds">>,
     case epay_http:post_form(Url, Headers, Form) of
         {ok, Status, _H, Body} when Status >= 200, Status < 300 ->
@@ -165,19 +210,28 @@ refund(Cfg, Req) ->
             {error, http_err_bin(Reason)}
     end.
 
+%% 官方 Refund.status 枚举：pending | requires_action | succeeded | failed |
+%% canceled。succeeded/pending 视为受理成功返回 {ok, Resp}；
+%% requires_action/failed/canceled 及未知值一律 {refund_failed, Msg}
+%% （Msg 含状态原文）；2xx 响应缺 status（或非 binary）属非法响应，
+%% 不得 fallthrough {ok, _}。
 -spec parse_refund(binary()) -> {ok, map()} | epay_gateway:err().
 parse_refund(Body) ->
     case epay_util:json_decode(Body) of
-        {ok, #{<<"status">> := Status} = Resp} ->
+        {ok, #{<<"status">> := Status} = Resp} when is_binary(Status) ->
             case lists:member(Status, [<<"succeeded">>, <<"pending">>]) of
                 true -> {ok, Resp};
-                false -> {error, {gateway_error, <<"Stripe 退款状态:"/utf8, Status/binary>>}}
+                false -> {error, {refund_failed, refund_fail_msg(Status)}}
             end;
         {ok, Resp} when is_map(Resp) ->
-            {ok, Resp};
+            {error, {invalid_refund_response, <<"Stripe 退款响应缺少 status"/utf8>>}};
         _ ->
             {error, {invalid_response, <<"Stripe 退款响应解析失败"/utf8>>}}
     end.
+
+-spec refund_fail_msg(binary()) -> binary().
+refund_fail_msg(Status) ->
+    <<"Stripe 退款未成功, status="/utf8, Status/binary>>.
 
 %%%===================================================================
 %%% Webhook 验签

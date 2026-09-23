@@ -7,13 +7,23 @@
 %%% 社区 alipay-sdk-go 的 RSA2 流程。覆盖：
 %%%   - app_pay/4     : 生成已签名 orderStr 供客户端 SDK 唤起（无需服务端 HTTP）
 %%%   - refund/2      : alipay.trade.refund，服务端 HTTP POST 到 gateway.do
-%%%   - verify_notify/2: 异步通知 RSA2 验签
+%%%   - verify_notify/2: 异步通知 RSA2 验签 + app_id 绑定
 %%%
-%%% Cfg :: #{app_id := binary(), private_key := binary(), public_key := binary(),
-%%%          gateway_url => binary(), notify_url => binary()}
+%%% 同步应答验签（对标官方 Java SDK AbstractAlipayClient.checkResponseSign）：
+%%% 在「原始响应字符串」上定位 <method>_response / error_response 节点的原始
+%%% JSON 字节验签（绝不 decode 后 re-encode）；code=10000 无 sign 一律
+%%% fail-closed（missing_signature）；失败响应带 sign 也验签；验签失败先做
+%%% 一次 `\/`→`/` 替换重试（官方 JSON 转义兼容）。
+%%%
+%%% Cfg :: #{app_id := binary(), private_key := binary(),
+%%%          public_key => binary(),            %% 公钥模式验签公钥
+%%%          alipay_public_cert => binary(),    %% 证书模式：支付宝公钥证书 PEM（优先）
+%%%          gateway_url => binary(), notify_url => binary(),
+%%%          app_cert_sn => binary(), alipay_root_cert_sn => binary()}
 %%% 金额统一以「分」(integer) 传入，内部转支付宝要求的「元」字符串。
 %%% @end
 %%%===================================================================
+
 
 %% epay_gateway behaviour
 -export([
@@ -27,6 +37,9 @@
 -define(REFUND_RESP_KEY, <<"alipay_trade_refund_response">>).
 -define(CLOSE_RESP_KEY, <<"alipay_trade_close_response">>).
 -define(CANCEL_RESP_KEY, <<"alipay_trade_cancel_response">>).
+-define(ERROR_RESP_KEY, <<"error_response">>).
+
+-include_lib("public_key/include/public_key.hrl").
 
 %% @doc 能力声明。App 支付 orderStr 由服务端签名后客户端直用，无独立二次签名；
 %% 支付宝支持关单（alipay.trade.close）与撤单（alipay.trade.cancel）。
@@ -54,7 +67,7 @@ trade_action(Cfg, Req, Method, RespKey, OkFun) ->
     case sign_params(Params, PriKey) of
         {ok, Signed} ->
             Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
-            do_open_request(Url, build_query(Signed), RespKey, OkFun);
+            do_open_request(Url, build_query(Signed), Cfg, RespKey, OkFun);
         {error, _} = Err ->
             normalize_err(Err)
     end.
@@ -87,14 +100,39 @@ create_payment(Cfg, Order) ->
 %% @doc 回调验签。Ctx :: #{form := map()}（已 url-decode 的异步通知表单）。
 %% 验签通过返回 {ok, FormMap}：除原始字段（out_trade_no/trade_no/trade_status/…）
 %% 外，加性附带归一 trade_state（epay_state:state()），调用方无须再认识渠道词汇。
+%% 另核对通知 app_id 与配置一致（官方通知必带；seller/订单号/金额留给调用方）。
 -spec verify_notify(map(), map()) -> {ok, map()} | epay_gateway:err().
 verify_notify(Cfg, Ctx) ->
     Form = maps:get(form, Ctx, #{}),
-    case verify_form(Cfg, Form) of
+    case check_app_id(Cfg, Form) of
         ok ->
-            St = map_alipay_state(maps:get(<<"trade_status">>, Form, <<>>)),
-            {ok, Form#{trade_state => St}};
-        {error, _} = Err -> Err
+            case verify_form(Cfg, Form) of
+                ok ->
+                    St = map_alipay_state(maps:get(<<"trade_status">>, Form, <<>>)),
+                    {ok, Form#{trade_state => St}};
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% 通知 app_id 绑定（fail-closed）：通知缺 app_id 或与配置不一致即拒绝，
+%% 防止其它 app 的通知被误受理。
+-spec check_app_id(map(), map()) -> ok | epay_gateway:err().
+check_app_id(Cfg, Form) ->
+    case maps:get(<<"app_id">>, Form, <<>>) of
+        <<>> ->
+            {error, {missing_app_id, <<"支付宝通知缺少 app_id"/utf8>>}};
+        AppId ->
+            case maps:get(app_id, Cfg, <<>>) of
+                <<>> ->
+                    {error, {missing_app_id, <<"支付宝配置缺少 app_id"/utf8>>}};
+                AppId ->
+                    ok;
+                _ ->
+                    {error, {app_id_mismatch, <<"支付宝通知 app_id 与配置不一致"/utf8>>}}
+            end
     end.
 
 %%%===================================================================
@@ -164,36 +202,25 @@ refund(Cfg, Req) ->
         {ok, Signed} ->
             Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
             Body = build_query(Signed),
-            do_refund_request(Url, Body);
+            do_refund_request(Url, Body, Cfg);
         {error, _} = Err ->
             normalize_err(Err)
     end.
 
--spec do_refund_request(binary(), binary()) -> {ok, map()} | epay_gateway:err().
-do_refund_request(Url, Body) ->
+-spec do_refund_request(binary(), binary(), map()) -> {ok, map()} | epay_gateway:err().
+do_refund_request(Url, Body, Cfg) ->
     case epay_http:post_form(Url, [], Body) of
         {ok, 200, _H, RespBody} ->
-            parse_refund_response(RespBody);
+            parse_refund_response(RespBody, Cfg);
         {ok, Status, _H, _B} ->
             {error, {gateway_error, <<"支付宝退款 HTTP "/utf8, (integer_to_binary(Status))/binary>>}};
         {error, Reason} ->
             {error, http_err_bin(Reason)}
     end.
 
--spec parse_refund_response(binary()) -> {ok, map()} | epay_gateway:err().
-parse_refund_response(RespBody) ->
-    case epay_util:json_decode(RespBody) of
-        {ok, #{?REFUND_RESP_KEY := Resp}} when is_map(Resp) ->
-            case maps:get(<<"code">>, Resp, <<>>) of
-                <<"10000">> ->
-                    {ok, Resp};
-                _ ->
-                    SubMsg = maps:get(<<"sub_msg">>, Resp, maps:get(<<"msg">>, Resp, <<"退款失败"/utf8>>)),
-                    {error, {gateway_error, SubMsg}}
-            end;
-        _ ->
-            {error, {invalid_response, <<"支付宝退款响应解析失败"/utf8>>}}
-    end.
+-spec parse_refund_response(binary(), map()) -> {ok, map()} | epay_gateway:err().
+parse_refund_response(RespBody, Cfg) ->
+    parse_signed_response(RespBody, Cfg, ?REFUND_RESP_KEY, <<"退款失败"/utf8>>, fun(R) -> R end).
 
 %%%===================================================================
 %%% 异步通知验签（RSA2）
@@ -329,7 +356,7 @@ query(Cfg, Q) ->
     case sign_params(Params, PriKey) of
         {ok, Signed} ->
             Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
-            do_open_request(Url, build_query(Signed), ?QUERY_RESP_KEY, fun query_ok/1);
+            do_open_request(Url, build_query(Signed), Cfg, ?QUERY_RESP_KEY, fun query_ok/1);
         {error, _} = Err ->
             normalize_err(Err)
     end.
@@ -345,7 +372,7 @@ download_bill(Cfg, Req) ->
     case sign_params(Params, PriKey) of
         {ok, Signed} ->
             Url = maps:get(gateway_url, Cfg, ?DEFAULT_GATEWAY),
-            do_open_request(Url, build_query(Signed), ?BILL_RESP_KEY, fun bill_ok/1);
+            do_open_request(Url, build_query(Signed), Cfg, ?BILL_RESP_KEY, fun bill_ok/1);
         {error, _} = Err ->
             normalize_err(Err)
     end.
@@ -365,36 +392,240 @@ build_params(AppId, Method, Biz, Cfg) ->
     },
     maybe_put_cert_sn(Base, Cfg).
 
-%% 发请求 + 取响应业务节点 + code 校验 + 委托 OkFun 构造成功返回。
--spec do_open_request(binary(), binary(), binary(), fun((map()) -> map())) ->
+%% 发请求 + 原始字节验签解析 + code 校验 + 委托 OkFun 构造成功返回。
+-spec do_open_request(binary(), binary(), map(), binary(), fun((map()) -> map())) ->
     {ok, map()} | epay_gateway:err().
-do_open_request(Url, Body, RespKey, OkFun) ->
+do_open_request(Url, Body, Cfg, RespKey, OkFun) ->
     case epay_http:post_form(Url, [], Body) of
         {ok, 200, _H, RespBody} ->
-            parse_open_response(RespBody, RespKey, OkFun);
+            parse_signed_response(RespBody, Cfg, RespKey, <<"接口失败"/utf8>>, OkFun);
         {ok, Status, _H, _B} ->
             {error, {gateway_error, <<"支付宝接口 HTTP "/utf8, (integer_to_binary(Status))/binary>>}};
         {error, Reason} ->
             {error, http_err_bin(Reason)}
     end.
 
--spec parse_open_response(binary(), binary(), fun((map()) -> map())) ->
+%%%===================================================================
+%%% 同步应答解析 + 原始字节验签
+%%%（对标官方 AbstractAlipayClient.checkResponseSign / JsonConverter.getSignSourceData）
+%%%===================================================================
+
+%% 同步应答统一入口：json_decode 后定位业务节点（<method>_response，
+%% 缺失时回退 error_response），在「原始响应字节」上验签（绝不 re-encode），
+%% 再按 code 分流。ErrDefault 为业务失败兜底文案，OkFun 构造成功 map。
+-spec parse_signed_response(binary(), map(), binary(), binary(), fun((map()) -> map())) ->
     {ok, map()} | epay_gateway:err().
-parse_open_response(RespBody, RespKey, OkFun) ->
+parse_signed_response(RespBody, Cfg, RespKey, ErrDefault, OkFun) ->
     case epay_util:json_decode(RespBody) of
-        {ok, #{RespKey := Resp}} when is_map(Resp) ->
-            case maps:get(<<"code">>, Resp, <<>>) of
-                <<"10000">> ->
-                    {ok, OkFun(Resp)};
-                _ ->
-                    {error,
-                        {gateway_error,
-                            maps:get(
-                                <<"sub_msg">>, Resp, maps:get(<<"msg">>, Resp, <<"接口失败"/utf8>>)
-                            )}}
+        {ok, Top} when is_map(Top) ->
+            case pick_node_key(Top, RespKey) of
+                {ok, NodeKey} ->
+                    handle_response_node(RespBody, Top, NodeKey, Cfg, ErrDefault, OkFun);
+                error ->
+                    {error, {invalid_response, <<"支付宝响应解析失败"/utf8>>}}
             end;
         _ ->
             {error, {invalid_response, <<"支付宝响应解析失败"/utf8>>}}
+    end.
+
+%% 节点选择：优先业务方法节点；缺失时回退 error_response（官方顺序）。
+-spec pick_node_key(map(), binary()) -> {ok, binary()} | error.
+pick_node_key(Top, RespKey) ->
+    case Top of
+        #{RespKey := R} when is_map(R) -> {ok, RespKey};
+        #{?ERROR_RESP_KEY := E} when is_map(E) -> {ok, ?ERROR_RESP_KEY};
+        _ -> error
+    end.
+
+%% 验签分流（fail-closed）：
+%%   - code=10000 且有 sign → 验签通过才成功；
+%%   - code=10000 无 sign    → missing_signature（成功响应必有签名）；
+%%   - 失败响应带 sign       → 必须验签，通过后仍报 gateway_error；
+%%   - 失败响应无 sign       → 不验签，维持 gateway_error（对齐官方）。
+-spec handle_response_node(binary(), map(), binary(), map(), binary(), fun((map()) -> map())) ->
+    {ok, map()} | epay_gateway:err().
+handle_response_node(RespBody, Top, NodeKey, Cfg, ErrDefault, OkFun) ->
+    Resp = maps:get(NodeKey, Top),
+    Code = maps:get(<<"code">>, Resp, <<>>),
+    Sign = maps:get(<<"sign">>, Top, <<>>),
+    case {Code =:= <<"10000">>, Sign =/= <<>>} of
+        {true, false} ->
+            {error, {missing_signature, <<"支付宝成功响应缺少签名"/utf8>>}};
+        {true, true} ->
+            verify_then(
+                RespBody, NodeKey, Sign, Cfg, fun() -> {ok, OkFun(Resp)} end
+            );
+        {false, false} ->
+            biz_error(Resp, ErrDefault);
+        {false, true} ->
+            verify_then(RespBody, NodeKey, Sign, Cfg, fun() -> biz_error(Resp, ErrDefault) end)
+    end.
+
+%% 先验签再执行 Continue；验签失败返回 bad_signature。
+-spec verify_then(binary(), binary(), binary(), map(),
+    fun(() -> {ok, map()} | epay_gateway:err())) ->
+    {ok, map()} | epay_gateway:err().
+verify_then(RespBody, NodeKey, Sign, Cfg, Continue) ->
+    case check_response_sign(RespBody, NodeKey, Sign, Cfg) of
+        ok -> Continue();
+        {error, _} = Err -> Err
+    end.
+
+%% 业务失败文案：sub_msg 优先，msg 次之，兜底 ErrDefault。
+-spec biz_error(map(), binary()) -> epay_gateway:err().
+biz_error(Resp, ErrDefault) ->
+    SubMsg = maps:get(<<"sub_msg">>, Resp, maps:get(<<"msg">>, Resp, ErrDefault)),
+    {error, {gateway_error, SubMsg}}.
+
+%% 应答验签核心：从原始响应字节提取节点 JSON 原文作验签串，base64 解顶层
+%% sign 后验签；验签串提取失败按 invalid_response 处理。
+-spec check_response_sign(binary(), binary(), binary(), map()) -> ok | epay_gateway:err().
+check_response_sign(RespBody, NodeKey, SignB64, Cfg) ->
+    case extract_sign_source(RespBody, NodeKey) of
+        {ok, Source} ->
+            case safe_b64_decode(SignB64) of
+                {ok, SigBin} ->
+                    verify_sign_source(Source, SigBin, response_verify_key(Cfg));
+                error ->
+                    {error, {bad_signature, <<"支付宝响应签名 base64 解析失败"/utf8>>}}
+            end;
+        error ->
+            {error, {invalid_response, <<"支付宝响应验签串提取失败"/utf8>>}}
+    end.
+
+%% 验签（官方 JSON 转义兼容）：先对原始字节验签；失败则把字节序列 `\/`
+%% （反斜杠+斜杠）替换为 `/` 再重试一次；仍失败报 bad_signature。
+-spec verify_sign_source(binary(), binary(), {ok, binary()} | epay_gateway:err()) ->
+    ok | epay_gateway:err().
+verify_sign_source(_Source, _SigBin, {error, _} = Err) ->
+    Err;
+verify_sign_source(Source, SigBin, {ok, PubKey}) ->
+    case epay_crypto:rsa_verify_sha256(Source, SigBin, PubKey) of
+        true ->
+            ok;
+        false ->
+            Unescaped = binary:replace(Source, <<"\\/">>, <<"/">>, [global]),
+            case epay_crypto:rsa_verify_sha256(Unescaped, SigBin, PubKey) of
+                true -> ok;
+                false -> {error, {bad_signature, <<"支付宝响应验签失败"/utf8>>}}
+            end
+    end.
+
+%% 应答验签公钥：证书模式（alipay_public_cert 非空）优先——提取证书
+%% subjectPublicKey 转 'RSAPublicKey' PEM（适配 epay_crypto 的 PEM 入参形态）；
+%% 否则用公钥模式 public_key；两者皆缺 fail-closed。
+-spec response_verify_key(map()) -> {ok, binary()} | epay_gateway:err().
+response_verify_key(Cfg) ->
+    case Cfg of
+        #{alipay_public_cert := CertPem} when CertPem =/= <<>> ->
+            case cert_pubkey_pem(CertPem) of
+                {ok, PubPem} -> {ok, PubPem};
+                error -> {error, {no_credential, <<"支付宝公钥证书解析失败"/utf8>>}}
+            end;
+        _ ->
+            case maps:get(public_key, Cfg, <<>>) of
+                <<>> -> {error, {no_credential, <<"缺少支付宝公钥"/utf8>>}};
+                PubKey -> {ok, PubKey}
+            end
+    end.
+
+%% 从 X.509 证书（PEM）提取 RSA 公钥并转 'RSAPublicKey' PEM。仅取钥，
+%% 不校验链/有效期（与官方 SDK 取证书公钥验签同语义）。
+-spec cert_pubkey_pem(binary()) -> {ok, binary()} | error.
+cert_pubkey_pem(CertPem) ->
+    try
+        [{'Certificate', Der, _}] = public_key:pem_decode(CertPem),
+        #'OTPCertificate'{tbsCertificate = TBSC} = public_key:pkix_decode_cert(Der, otp),
+        #'OTPTBSCertificate'{subjectPublicKeyInfo = SPKI} = TBSC,
+        #'OTPSubjectPublicKeyInfo'{subjectPublicKey = Pub} = SPKI,
+        Key =
+            case Pub of
+                {#'RSAPublicKey'{} = K, _} -> K;
+                #'RSAPublicKey'{} = K -> K
+            end,
+        {ok, public_key:pem_encode([public_key:pem_entry_encode('RSAPublicKey', Key)])}
+    catch
+        _:_ -> error
+    end.
+
+%%%===================================================================
+%%% 原始响应字节验签串提取（对标官方 JsonConverter.getSignSourceData）
+%%%===================================================================
+
+%% 在原始响应 binary 上定位 NodeKey 节点的 JSON 原文：找到 `"key"` 后跳过
+%% 空白与 `:` 到起始 `{`，做字符串感知的括号配对，取匹配 `}` 的原始字节。
+-spec extract_sign_source(binary(), binary()) -> {ok, binary()} | error.
+extract_sign_source(RespBody, NodeKey) ->
+    KeyPat = <<"\"", NodeKey/binary, "\"">>,
+    case binary:match(RespBody, KeyPat) of
+        nomatch ->
+            error;
+        {KeyStart, KeyLen} ->
+            find_node_open_brace(RespBody, KeyStart + KeyLen)
+    end.
+
+%% 跳过键后的空白与 `:`，定位节点对象起始 `{`（节点非对象则 error）。
+-spec find_node_open_brace(binary(), non_neg_integer()) -> {ok, binary()} | error.
+find_node_open_brace(Bin, Pos) when Pos < byte_size(Bin) ->
+    case binary:at(Bin, Pos) of
+        C when C =:= $\s; C =:= $\t; C =:= $\n; C =:= $\r ->
+            find_node_open_brace(Bin, Pos + 1);
+        $: ->
+            find_brace_after_colon(Bin, Pos + 1);
+        _ ->
+            error
+    end;
+find_node_open_brace(_Bin, _Pos) ->
+    error.
+
+-spec find_brace_after_colon(binary(), non_neg_integer()) -> {ok, binary()} | error.
+find_brace_after_colon(Bin, Pos) when Pos < byte_size(Bin) ->
+    case binary:at(Bin, Pos) of
+        C when C =:= $\s; C =:= $\t; C =:= $\n; C =:= $\r ->
+            find_brace_after_colon(Bin, Pos + 1);
+        ${ ->
+            match_braces(Bin, Pos, Pos, 0, outside);
+        _ ->
+            error
+    end;
+find_brace_after_colon(_Bin, _Pos) ->
+    error.
+
+%% 字符串感知括号配对：从 Start（指向 `{`）扫描至匹配 `}`，提取含两端括号的
+%% 原始字节。字符串内的 `{`/`}` 不计数；`\"` 转义吞掉后一个字节；支持嵌套
+%% 对象与数组（数组元素的花括号照常计数）。
+-spec match_braces(binary(), non_neg_integer(), non_neg_integer(), non_neg_integer(),
+    outside | in_string | in_escape) ->
+    {ok, binary()} | error.
+match_braces(Bin, _Start, Pos, _Depth, _State) when Pos >= byte_size(Bin) ->
+    %% 扫描到末尾仍未闭合：响应截断
+    error;
+match_braces(Bin, Start, Pos, Depth, State) ->
+    C = binary:at(Bin, Pos),
+    case State of
+        in_escape ->
+            match_braces(Bin, Start, Pos + 1, Depth, in_string);
+        in_string ->
+            NewState =
+                if
+                    C =:= $\\ -> in_escape;
+                    C =:= $" -> outside;
+                    true -> in_string
+                end,
+            match_braces(Bin, Start, Pos + 1, Depth, NewState);
+        outside ->
+            case C of
+                $" ->
+                    match_braces(Bin, Start, Pos + 1, Depth, in_string);
+                ${ ->
+                    match_braces(Bin, Start, Pos + 1, Depth + 1, outside);
+                $} when Depth =:= 1 ->
+                    {ok, binary:part(Bin, Start, Pos - Start + 1)};
+                $} ->
+                    match_braces(Bin, Start, Pos + 1, Depth - 1, outside);
+                _ ->
+                    match_braces(Bin, Start, Pos + 1, Depth, outside)
+            end
     end.
 
 -spec query_ok(map()) -> map().

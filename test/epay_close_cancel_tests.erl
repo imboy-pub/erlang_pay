@@ -7,14 +7,23 @@
 %%%===================================================================
 -include_lib("eunit/include/eunit.hrl").
 
--define(WX_CFG, #{mch_id => <<"M1">>, mch_serial_no => <<"S1">>, private_key => <<"K1">>}).
+-define(WX_CFG, #{
+    mch_id => <<"M1">>,
+    mch_serial_no => <<"S1">>,
+    private_key => <<"K1">>,
+    platform_public_key => <<"PK1">>  %% EP-11：应答验签所需（meck 验签通过）
+}).
 -define(ST_CFG, #{secret_key => <<"sk_test">>}).
--define(AL_CFG, #{app_id => <<"A1">>, private_key => <<"K1">>}).
+%% EP-12：同步应答需验签，公钥取合同测试 fixture（signed_body 用配套私钥签名）
+-define(AL_CFG, #{app_id => <<"A1">>, private_key => <<"K1">>,
+    public_key => epay_alipay_contract_tests:fixture_pub_pem()}).
 
 with_mocks(Fun) ->
     meck:new(epay_http, [passthrough]),
     meck:new(epay_crypto, [passthrough]),
     meck:expect(epay_crypto, rsa_sign_sha256, fun(_, _) -> {ok, <<"sig">>} end),
+    %% EP-11：2xx 应答先验签后解析——mock 验签通过（聚焦关单流程不变）
+    meck:expect(epay_crypto, rsa_verify_sha256, fun(_, _, _) -> true end),
     try
         Fun()
     after
@@ -23,7 +32,16 @@ with_mocks(Fun) ->
     end.
 
 mock_post_json(Status, Body) ->
-    meck:expect(epay_http, post_json, fun(_U, _H, _B) -> {ok, Status, [], Body} end).
+    meck:expect(epay_http, post_json, fun(_U, _H, _B) -> {ok, Status, wx_resp_hdrs(), Body} end).
+
+%% EP-11：mock 应答补合法验签头（时间戳取当前时间，落在 ±300s 窗口内）
+wx_resp_hdrs() ->
+    [
+        {"Wechatpay-Timestamp", integer_to_list(erlang:system_time(second))},
+        {"Wechatpay-Nonce", "mock-nonce"},
+        {"Wechatpay-Signature", "c2ln"},
+        {"Wechatpay-Serial", "mock-serial"}
+    ].
 
 mock_post_form(Body) ->
     meck:expect(epay_http, post_form, fun(_U, _H, _B) -> {ok, 200, [], Body} end).
@@ -54,7 +72,11 @@ wechat_close_error_test() ->
 %%%-------------------------------------------------------------------
 alipay_close_ok_test() ->
     with_mocks(fun() ->
-        mock_post_form(<<"{\"alipay_trade_close_response\":{\"code\":\"10000\"}}">>),
+        mock_post_form(
+            epay_alipay_contract_tests:signed_body(
+                <<"alipay_trade_close_response">>, <<"{\"code\":\"10000\"}">>
+            )
+        ),
         ?assertMatch(
             {ok, #{type := alipay_close}},
             epay_alipay:close(?AL_CFG, #{out_trade_no => <<"X1">>})
@@ -64,7 +86,10 @@ alipay_close_ok_test() ->
 alipay_cancel_ok_test() ->
     with_mocks(fun() ->
         mock_post_form(
-            <<"{\"alipay_trade_cancel_response\":{\"code\":\"10000\",\"action\":\"close\"}}">>
+            epay_alipay_contract_tests:signed_body(
+                <<"alipay_trade_cancel_response">>,
+                <<"{\"code\":\"10000\",\"action\":\"close\"}">>
+            )
         ),
         ?assertMatch(
             {ok, #{type := alipay_cancel, action := <<"close">>}},
@@ -89,7 +114,11 @@ stripe_cancel_ok_test() ->
 %%%-------------------------------------------------------------------
 facade_close_ok_test() ->
     with_mocks(fun() ->
-        mock_post_form(<<"{\"alipay_trade_close_response\":{\"code\":\"10000\"}}">>),
+        mock_post_form(
+            epay_alipay_contract_tests:signed_body(
+                <<"alipay_trade_close_response">>, <<"{\"code\":\"10000\"}">>
+            )
+        ),
         ?assertMatch(
             {ok, #{type := alipay_close}},
             erlang_pay:close(alipay, ?AL_CFG, #{out_trade_no => <<"X1">>})
