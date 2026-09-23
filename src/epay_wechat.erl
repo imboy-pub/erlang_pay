@@ -362,7 +362,7 @@ post_signed(Cfg, Path, Body) ->
             Headers = [
                 {<<"Authorization">>, Auth},
                 {<<"Accept">>, <<"application/json">>},
-                {<<"User-Agent">>, <<"erlang_pay/0.1.0">>}
+                {<<"User-Agent">>, ua()}
             ],
             case epay_http:post_json(Url, Headers, Body) of
                 {ok, Status, RespHeaders, RespBody} when Status >= 200, Status < 300 ->
@@ -453,6 +453,11 @@ auth_header(MchId, Serial, Nonce, Timestamp, SignB64) ->
         "timestamp=\"", Timestamp/binary, "\",",
         "serial_no=\"", Serial/binary, "\"">>.
 
+%% User-Agent 统一取库版本号，升级只改 erlang_pay:version/0 一处。
+-spec ua() -> binary().
+ua() ->
+    <<"erlang_pay/", (erlang_pay:version())/binary>>.
+
 %% 网关业务错误（HTTP 非 2xx）：取微信 message/code，打 {gateway_error, Msg}。
 -spec wechat_err_msg(binary()) -> {atom(), binary()}.
 wechat_err_msg(RespBody) ->
@@ -525,7 +530,7 @@ get_signed(Cfg, Path) ->
             Headers = [
                 {<<"Authorization">>, Auth},
                 {<<"Accept">>, <<"application/json">>},
-                {<<"User-Agent">>, <<"erlang_pay/0.1.0">>}
+                {<<"User-Agent">>, ua()}
             ],
             case epay_http:get(Url, Headers) of
                 {ok, Status, RespHeaders, RespBody} when Status >= 200, Status < 300 ->

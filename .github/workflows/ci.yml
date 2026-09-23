@@ -1,0 +1,51 @@
+# erlang_pay CI — OTP 28/29 双版本矩阵
+#
+# 依据 rebar.config 实况（2026-09-22 A3 核实）：
+#   - deps: jsone 1.8.1（test profile 另有 meck 1.2.0）
+#   - project_plugins: rebar3_hex + rebar3_ex_doc 均已配置，
+#     故 ex_doc 与 hex build 属于仓库真实可执行步骤。
+#
+# 已知阻塞（A3 发现，非本 lane 修复范围）：
+#   src/epay_stripe.erl:146 (refund/2) 的 edoc 注释含 `< "pi_"` 序列，
+#   导致 edoc_doclet_chunks 报 {invalid_name,"<\"pi_\""}，
+#   当前 `rebar3 ex_doc` / `rebar3 hex build` 在本地实测因此失败。
+#   下方步骤保留（真实质量信号），待该注释修正后自然转绿。
+#
+# hex build 仅本地打包验证，绝不 publish（无 HEX_API_KEY，也不调用 publish）。
+
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: OTP ${{ matrix.otp }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ["28", "29"]
+    steps:
+      - name: Checkout（clean）
+        uses: actions/checkout@v4
+
+      - name: Setup Erlang/OTP + rebar3
+        uses: erlef/setup-beam@v2
+        with:
+          erlang-version: ${{ matrix.otp }}
+          # rebar3 由 setup-beam 按所选 OTP 自动配套安装
+
+      - name: Compile
+        run: rebar3 compile
+
+      - name: EUnit
+        run: rebar3 eunit
+
+      - name: Dialyzer
+        run: rebar3 dialyzer
+
+      - name: Build docs（rebar3_ex_doc，rebar.config 已配置）
+        run: rebar3 ex_doc
+
+      - name: Hex package build（仅本地打包验证，绝不 publish）
+        run: rebar3 hex build

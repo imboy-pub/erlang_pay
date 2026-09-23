@@ -122,7 +122,7 @@
 
 -spec version() -> binary().
 version() ->
-    <<"0.1.0">>.
+    <<"0.3.0">>.
 
 %% @doc 下单。返回打 tag 的 map（type 区分支付宝 orderStr / 微信 prepay_id /
 %% Stripe client_secret）。Order 见各网关模块文档。
