@@ -1,7 +1,7 @@
 # erlang_pay — AI 上下文 / AI Context
 
 > 纯 Erlang 第三方支付库：支付宝（App）、微信 v3（JSAPI/Native）、Stripe（PaymentIntent）。
-> 独立 git 仓。完整 API/示例见 [README.md](./README.md)，路线图见 [docs/BACKLOG.md](./docs/BACKLOG.md)、[docs/PRODUCTION_READINESS.md](./docs/PRODUCTION_READINESS.md)。
+> 独立 git 仓。完整 API/示例见 [README.md](./README.md)。
 
 ## 设计铁律（改代码前必读）
 - **凭据无关 / 零业务耦合**：所有 API 以 `Cfg :: map()` 传凭据，库**绝不读 application env**，可被任意工程复用。
@@ -26,7 +26,6 @@ rebar3 dialyzer
 | `epay_alipay` / `epay_wechat` / `epay_stripe` | 各网关实现 |
 | `epay_money` | 多币种 exponent 金额换算 |
 | `epay_state` | 统一 trade_state 映射 |
-| `epay_cert_mgr` | 可选：微信平台证书自动轮换（gen_server + ETS，多租户） |
 | `epay_crypto` | RSA2 / HMAC / AES-256-GCM / 常量时间比较 / PEM |
 | `epay_http` / `epay_util` | TLS 出站 / URL·表单·JSON |
 
