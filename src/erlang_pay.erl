@@ -9,7 +9,8 @@
 %%%      application:get_env —— 便于被任意 Erlang 工程复用。
 %%%   2) 统一门面：按 gateway 原子分发到 epay_alipay/epay_wechat/epay_stripe
 %%%      （均实现 epay_gateway behaviour）。返回值打 tag，调用方统一处理差异。
-%%%   3) 仅依赖 OTP crypto/public_key/inets/ssl + jsone。
+%%%   3) 仅依赖 OTP（crypto/public_key/inets/ssl + OTP 27+ 内置 json 模块），
+%%%      运行时零第三方依赖。
 %%%   4) 最小输入合同（EP-20/D-05）：分发前在门面做 action 级最小校验 ——
 %%%      Cfg/Req 必须为 map，Req 按 ?INPUT_SPECS 校验 gateway×action 必填
 %%%      字段（坏输入 {error, {bad_request, 中文 Msg}} 前置拒绝，不再透传

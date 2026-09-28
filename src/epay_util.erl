@@ -44,12 +44,13 @@ form_encode(Pairs) ->
 
 -spec json_encode(term()) -> binary().
 json_encode(Term) ->
-    jsone:encode(Term, [native_utf8]).
+    %% OTP 27+ json:encode/1 返回 iodata，压成 binary 以维持本函数合同。
+    iolist_to_binary(json:encode(Term)).
 
 -spec json_decode(binary()) -> {ok, term()} | {error, atom()}.
 json_decode(Bin) ->
     try
-        {ok, jsone:decode(Bin, [{object_format, map}])}
+        {ok, json:decode(Bin)}
     catch
         _:_ -> {error, invalid_json}
     end.

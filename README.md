@@ -15,18 +15,20 @@ A pure-Erlang payment gateway library for Alipay (App pay), WeChat Pay v3 (JSAPI
   Idempotent Stripe refunds: a stable refund id is required; no request without one.
 - **凭据无关**：凭据全部由 `Cfg` map 传入，库不读任何 application env。
   Credentials come in as a `Cfg` map; the library reads no application env.
-- **仅依赖 OTP + jsone**；出站强制 HTTPS + TLS 证书/主机名校验。
-  Only OTP + jsone; outbound is https-only with TLS certificate and hostname checks.
+- **零第三方依赖**：JSON 用 OTP 27+ 内置 `json` 模块；出站强制 HTTPS + TLS 证书/主机名校验。
+  Zero runtime dependencies (JSON via the OTP 27+ built-in `json` module); outbound is https-only with TLS certificate and hostname checks.
 - **金额一律最小货币单位整数**（分 / cents），无浮点误差。
   All amounts are integers in the smallest currency unit — no floating point.
 
 ## 安装 / Install
 
+要求 Erlang/OTP 27+（内置 `json` 模块）。/ Requires Erlang/OTP 27+ (built-in `json` module).
+
 ```erlang
 %% rebar.config
-{deps, [{erlang_pay, {git, "https://github.com/imboy-pub/erlang_pay.git", {tag, "0.3.0"}}}]}.
+{deps, [{erlang_pay, {git, "https://github.com/imboy-pub/erlang_pay.git", {tag, "0.3.1"}}}]}.
 %% Gitee 镜像 / Gitee mirror:
-%% {deps, [{erlang_pay, {git, "https://gitee.com/imboy-pub/erlang_pay.git", {tag, "0.3.0"}}}]}.
+%% {deps, [{erlang_pay, {git, "https://gitee.com/imboy-pub/erlang_pay.git", {tag, "0.3.1"}}}]}.
 ```
 
 ## 快速上手 / Quick Start

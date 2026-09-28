@@ -5,7 +5,7 @@
 
 ## 设计铁律（改代码前必读）
 - **凭据无关 / 零业务耦合**：所有 API 以 `Cfg :: map()` 传凭据，库**绝不读 application env**，可被任意工程复用。
-- **仅依赖 OTP**：`crypto`/`public_key`/`inets`/`ssl` + `jsone`，不得引入其他运行时依赖。
+- **仅依赖 OTP（≥27）**：`crypto`/`public_key`/`inets`/`ssl` + 内置 `json` 模块，不得引入任何第三方运行时依赖。
 - **统一错误**：失败一律 `{error, {Code::atom(), Msg::binary()}}`（Code 见 README 表）。
 - **金额用最小货币单位整数**：`epay_money` 持 ISO 4217 exponent 表（USD/EUR=2，JPY/KRW=0，BHD/KWD=3），**不假定 ×100**，禁浮点。
 - **能力差异显式声明**：经 `epay_gateway:capabilities/0` + `supports/2`，不支持返回 `{error, {unsupported, _}}`，勿用反射。

@@ -169,7 +169,7 @@ query_signed_raw_bytes_ok_test() ->
 %%% 2. re-encode 区分：只有「原始节点字节」的签名能过
 %%%-------------------------------------------------------------------
 
-%% 节点手写为逆字典序；erlang json re-encode（jsone 小 map 按字典序输出）
+%% 节点手写为逆字典序；erlang json re-encode（内置 json 模块小 map 按字典序输出）
 %% 字节形态必然不同 → 对 re-encode 字节的签名必须验签失败。
 reencode_node() ->
     <<"{\"trade_status\":\"TRADE_SUCCESS\",\"msg\":\"Success\",\"code\":\"10000\"}">>.

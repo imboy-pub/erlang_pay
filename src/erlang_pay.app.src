@@ -1,10 +1,10 @@
 {application, erlang_pay,
  [{description, "Pure-Erlang payment gateway library (Alipay/WeChat Pay v3/Stripe), modeled after the official wechatpay-go / stripe-go / alipay SDKs"},
-  {vsn, "0.3.0"},
+  {vsn, "0.3.1"},
   {registered, []},
   %% 空 modules 列表：rebar3 与 erlang.mk(被 imboy 以本地 dep 引用时)均据此自动填充
   {modules, []},
-  {applications, [kernel, stdlib, inets, ssl, crypto, public_key, jsone]},
+  {applications, [kernel, stdlib, inets, ssl, crypto, public_key]},
   {env, []},
   {licenses, ["Apache-2.0"]},
   {links, [{"GitHub", "https://github.com/imboy-pub/erlang_pay"}]}

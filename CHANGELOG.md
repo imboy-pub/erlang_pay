@@ -3,6 +3,15 @@
 All notable changes to `erlang_pay` are documented here.
 `erlang_pay` 的所有重要变更记录于此。
 
+## [0.3.1] - 2026-09-28
+
+### Changed / 变更
+
+- 移除 `jsone` 依赖，JSON 编解码改用 OTP 27+ 内置 `json` 模块 —— 运行时零第三方依赖。
+  Dropped the `jsone` dependency in favour of the OTP 27+ built-in `json` module — zero third-party runtime dependencies.
+- 最低版本要求提升至 Erlang/OTP 27（`json` 模块随 27 引入）。
+  Minimum supported Erlang/OTP raised to 27 (`json` was introduced in OTP 27).
+
 ## [0.3.0] - 2026-09-23
 
 安全加固与发布工程 / Security hardening and release engineering.
