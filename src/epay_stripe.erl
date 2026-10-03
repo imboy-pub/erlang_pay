@@ -1,7 +1,7 @@
 -module(epay_stripe).
 -behaviour(epay_gateway).
+-moduledoc "Stripe 网关（PaymentIntent）：创建 PaymentIntent / Refund，Webhook HMAC-SHA256 验签防重放。".
 %%%===================================================================
-%%% @doc Stripe 网关 / Stripe gateway（PaymentIntent）
 %%%
 %%% 移植自官方 stripe-go：
 %%%   - PaymentIntent 创建（POST /v1/payment_intents, form-urlencoded, Bearer key）

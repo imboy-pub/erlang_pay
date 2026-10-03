@@ -1,7 +1,7 @@
 -module(epay_alipay).
 -behaviour(epay_gateway).
+-moduledoc "支付宝网关 / Alipay gateway（App 支付 alipay.trade.app.pay）：orderStr 下单 / 退款 / 异步通知 RSA2 验签。".
 %%%===================================================================
-%%% @doc 支付宝网关 / Alipay gateway（App 支付 alipay.trade.app.pay）
 %%%
 %%% 移植自支付宝官方 PHP SDK 的 AlipaySignature（签名串构造）与
 %%% 社区 alipay-sdk-go 的 RSA2 流程。覆盖：

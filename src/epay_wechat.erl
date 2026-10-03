@@ -1,7 +1,7 @@
 -module(epay_wechat).
 -behaviour(epay_gateway).
+-moduledoc "微信支付 v3 网关 / WeChat Pay APIv3：JSAPI/Native 下单、paySign 二次签名、回调验签与 AES-256-GCM 解密。".
 %%%===================================================================
-%%% @doc 微信支付 v3 网关 / WeChat Pay APIv3 gateway
 %%%
 %%% 移植自官方 wechatpay-apiv3/wechatpay-go：
 %%%   - utils.SignSHA256WithRSA   -> APIv3 请求签名（商户私钥）

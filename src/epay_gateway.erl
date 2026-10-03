@@ -1,6 +1,6 @@
 -module(epay_gateway).
+-moduledoc "统一网关 behaviour：三家网关实现同一组动作，能力差异经 capabilities/0 + supports/2 显式声明。".
 %%%===================================================================
-%%% @doc 统一网关 behaviour / Unified gateway contract
 %%%
 %%% 借鉴 omnipay GatewayInterface 与 Go 的 interface segregation：三家网关
 %%% 实现同一组动作，差异通过「打 tag 的返回 map」与「可选回调」隔离。
