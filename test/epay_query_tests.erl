@@ -158,7 +158,7 @@ alipay_biz_error_test() ->
         ?assertMatch(
             {error, {gateway_error, _}},
             al_query(
-                <<"{\"alipay_trade_query_response\":{\"code\":\"40004\",\"sub_msg\":\"交易不存在\"}}"/utf8>>
+                ~B'{"alipay_trade_query_response":{"code":"40004","sub_msg":"交易不存在"}}'
             )
         )
     end).

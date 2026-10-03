@@ -148,13 +148,14 @@ cfg() ->
 %% 字符串内空格 + 字符串内转义引号与花括号；字段顺序刻意不同于字典序。
 -spec raw_node() -> binary().
 raw_node() ->
-    <<"{\"trade_status\":\"TRADE_SUCCESS\",\"msg\":\"Success\",\"code\":\"10000\","
-        "\"out_trade_no\":\"X1\",\"buyer_pay_amount\":\"1.00\",\"total_amount\":\"1.00\","
-        "\"fund_bill_list\":[{\"amount\":\"1.00\",\"fund_channel\":\"ALIPAYACCOUNT\"},"
-        "{\"amount\":\"0.00\",\"fund_channel\":\"PCREDIT\"}],"
-        "\"buyer_user_info\":{\"nick_name\":\"Ali ", "张三"/utf8,
-        "\",\"user_name\":\"", "张 三"/utf8, "\"},"
-        "\"passback_params\":\"{\\\"seller_id\\\":\\\"208810111\\\"}\"}">>.
+    ~B"""
+    {"trade_status":"TRADE_SUCCESS","msg":"Success","code":"10000",
+     "out_trade_no":"X1","buyer_pay_amount":"1.00","total_amount":"1.00",
+     "fund_bill_list":[{"amount":"1.00","fund_channel":"ALIPAYACCOUNT"},
+      {"amount":"0.00","fund_channel":"PCREDIT"}],
+     "buyer_user_info":{"nick_name":"Ali 张三","user_name":"张 三"},
+     "passback_params":"{\"seller_id\":\"208810111\"}"}
+    """.
 
 query_signed_raw_bytes_ok_test() ->
     with_http(signed_body(?QUERY_KEY, raw_node()), fun() ->
@@ -172,7 +173,7 @@ query_signed_raw_bytes_ok_test() ->
 %% 节点手写为逆字典序；erlang json re-encode（内置 json 模块小 map 按字典序输出）
 %% 字节形态必然不同 → 对 re-encode 字节的签名必须验签失败。
 reencode_node() ->
-    <<"{\"trade_status\":\"TRADE_SUCCESS\",\"msg\":\"Success\",\"code\":\"10000\"}">>.
+    ~B'{"trade_status":"TRADE_SUCCESS","msg":"Success","code":"10000"}'.
 
 reencoded_bytes(Node) ->
     {ok, Decoded} = epay_util:json_decode(Node),

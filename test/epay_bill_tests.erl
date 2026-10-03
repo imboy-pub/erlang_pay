@@ -85,7 +85,7 @@ alipay_bill_ok_test() ->
 alipay_bill_biz_error_test() ->
     with_mocks(fun() ->
         mock_post_form(
-            <<"{\"alipay_data_dataservice_bill_downloadurl_query_response\":{\"code\":\"40004\",\"sub_msg\":\"账单不存在\"}}"/utf8>>
+            ~B'{"alipay_data_dataservice_bill_downloadurl_query_response":{"code":"40004","sub_msg":"账单不存在"}}'
         ),
         ?assertMatch(
             {error, _}, epay_alipay:download_bill(?AL_CFG, #{bill_date => <<"2024-01-01">>})

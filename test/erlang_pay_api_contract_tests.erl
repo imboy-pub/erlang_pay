@@ -362,7 +362,7 @@ cfg_missing_credential_msg_content_test() ->
                 #{out_trade_no => <<"NO1">>, amount_fen => 100}),
         [?assertMatch({_, _}, binary:match(Msg, Needle))
          || Needle <- [<<"stripe">>, <<"create_payment">>, <<"secret_key">>,
-                       <<"缺少商户凭据"/utf8>>]]
+                       ~B'缺少商户凭据']]
     end).
 
 %% 优先级合同：Req 字段错误先于 Cfg 凭据错误（同为坏输入时报 bad_request）
@@ -444,7 +444,8 @@ bad_request_msg_content_test() ->
         {error, {bad_request, Msg}} =
             erlang_pay:create_payment(alipay, ?CFG, #{amount_fen => 100}),
         ?assert(is_binary(Msg)),
-        %% 注意：含中文的 needle 必须带 /utf8 后缀（与门面实现一致）
+        %% 注意：中文 needle 用 sigil 写法（~B'...' 即 UTF-8 字节）；
+        %% 带插值的 <<...>> 内的中文字面量仍需 /utf8 后缀
         [?assertMatch({_, _}, binary:match(Msg, Needle))
          || Needle <- [<<"alipay">>, <<"create_payment">>, <<"out_trade_no">>,
                        <<"binary">>]],
@@ -452,7 +453,7 @@ bad_request_msg_content_test() ->
             erlang_pay:create_payment(wechat, ?CFG,
                 #{out_trade_no => <<"NO1">>, amount_fen => 0}),
         [?assertMatch({_, _}, binary:match(Msg2, Needle))
-         || Needle <- [<<"wechat">>, <<"amount_fen">>, <<"正整数"/utf8>>]],
+         || Needle <- [<<"wechat">>, <<"amount_fen">>, ~B'正整数']],
         {error, {bad_request, Msg3}} =
             erlang_pay:refund(stripe, ?CFG, #{payment_intent => <<"pi_1">>}),
         [?assertMatch({_, _}, binary:match(Msg3, Needle))

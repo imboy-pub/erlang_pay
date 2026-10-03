@@ -60,7 +60,7 @@ wechat_close_ok_test() ->
 
 wechat_close_error_test() ->
     with_mocks(fun() ->
-        mock_post_json(400, <<"{\"code\":\"ORDER_CLOSED\",\"message\":\"已关闭\"}"/utf8>>),
+        mock_post_json(400, ~B'{"code":"ORDER_CLOSED","message":"已关闭"}'),
         ?assertMatch(
             {error, {gateway_error, _}},
             epay_wechat:close(?WX_CFG, #{out_trade_no => <<"X1">>})
