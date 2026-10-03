@@ -3,6 +3,20 @@
 All notable changes to `erlang_pay` are documented here.
 `erlang_pay` 的所有重要变更记录于此。
 
+## [Unreleased]
+
+### Changed / 变更
+
+- 测试中的手写 JSON 夹具改用 OTP 27 sigils（`~B"""..."""` / `~B'...'`），`/utf8` 段全部移除；
+  动态插值二进制保持 `<<...>>` 原样。
+  Hand-written JSON fixtures in the test suite now use OTP 27 sigils (`~B"""..."""` / `~B'...'`),
+  dropping every `/utf8` segment; dynamically assembled bodies keep their `<<...>>` form.
+- `CLAUDE.md` 改名为 `AGENTS.md`（跨工具通用约定），并在其中记录 sigil / `/utf8` / `-moduledoc` 代码约定。
+  `CLAUDE.md` renamed to `AGENTS.md` (the cross-tool convention) with the sigil, `/utf8` and
+  `-moduledoc` coding conventions documented.
+- 全部 10 个模块补齐 `-moduledoc` 属性（旧 `%%% @doc` 头注转换，细节注释保留）。
+  All 10 modules now carry a `-moduledoc` attribute (converted from legacy `%%% @doc` headers).
+
 ## [0.3.1] - 2026-09-28
 
 ### Changed / 变更
