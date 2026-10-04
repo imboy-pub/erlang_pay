@@ -3,7 +3,7 @@
 All notable changes to `erlang_pay` are documented here.
 `erlang_pay` 的所有重要变更记录于此。
 
-## [Unreleased]
+## [0.3.2] - 2026-10-04
 
 ### Changed / 变更
 
